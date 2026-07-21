@@ -146,10 +146,69 @@ The repository currently contains no application scaffold. Phase 0 creates:
   `systemd/rec-live-tronic-reconciler.service`, and
   `systemd/rec-live-tronic-reconciler.timer`: root-owned system units for the
   API and 30-second reconciliation tick.
-- `test/`: Node test-runner suites, fixtures, and isolated temporary SQLite and
-  filesystem helpers.
+- `test/functional/server.test.ts` and
+  `test/functional/recording-lifecycle.test.ts`: the two feature-level suites,
+  with shared process/SQLite/filesystem/systemd-stub helpers under
+  `test/functional/support/`.
 - `README.md`: dependency, build, installation, curl, diagnosis, and upgrade
   instructions.
+
+## Functional test approach
+
+Keep automated testing proportional to this small project. Use `tap` as the
+test framework and TypeScript test runner. Do not add unit
+tests for repositories, command builders, migrations, configuration parsing,
+the release tarball, or the installation script. `npm test` builds the program
+and runs two functional suites against its real process entry points:
+
+- The server suite starts the compiled HTTP server with a temporary SQLite
+  database and filesystem, then exercises health, cookie upload, scheduling,
+  listing, persistence across restart, live edits, validation, and cancellation
+  through HTTP.
+- The recording-lifecycle suite starts the compiled server, invokes the real
+  one-tick reconciler process, and supplies stub `systemd-run`/`systemctl`
+  executables at the operating-system boundary. It exercises schedule → start
+  → extend/shorten/stop → recorded, cancellation, missed windows, early exit,
+  launch/claim interruption, and reboot recovery as complete scenarios.
+
+The stubs record argv and model unit state; tests assert observable API status,
+files, and stop/start effects rather than individual functions. Real systemd,
+Streamlink, the release tarball, and the root installer get pragmatic smoke
+checks during the `irae-sheeta` acceptance run and are debugged there if they
+fail.
+
+Test file initialization and feature blocks:
+
+```ts
+// test/functional/server.test.ts
+import t from "tap";
+import { startFunctionalServer, stopFunctionalServer } from "./support/server.js";
+
+t.before(startFunctionalServer);
+t.teardown(stopFunctionalServer);
+
+t.test("serves health and the complete cookie and recording workflow");
+t.test("persists scheduled data across a server restart");
+t.test("validates requests without corrupting existing state");
+t.test("edits and cancels a live recording through public HTTP behavior");
+```
+
+```ts
+// test/functional/recording-lifecycle.test.ts
+import t from "tap";
+import {
+  startLifecycleHarness,
+  stopLifecycleHarness,
+} from "./support/lifecycle.js";
+
+t.before(startLifecycleHarness);
+t.teardown(stopLifecycleHarness);
+
+t.test("records a scheduled window and stops it at the durable deadline");
+t.test("extends, shortens, and immediately cancels running recordings");
+t.test("converges after early exit and launch/claim interruption");
+t.test("recovers an active window after reboot and marks missed windows");
+```
 
 ## Phase 0 — reliable curl-first recording
 
@@ -162,10 +221,11 @@ complete. Do not commit every sub-step separately.
    convention, and configuration loader. Require Node 24 at startup. Default
    `REC_LIVE_HOST` to `0.0.0.0` while allowing any valid operator-selected
    listen address without application-level network policy.
-2. Add Express, multipart support, and `better-sqlite3` as runtime dependencies;
-   keep UUID generation, test runner, and fetch on Node built-ins where
-   practical. Install dependencies on Debian x86-64 rather than copying native
-   `node_modules` from a macOS development machine.
+2. Add Express, multipart support, and `better-sqlite3` as runtime dependencies,
+   plus `tap` as the development-only functional test framework. Keep UUID
+   generation and fetch on Node built-ins where practical. Install dependencies
+   on Debian x86-64 rather than copying native `node_modules` from a macOS
+   development machine.
 3. Add the empty app/server composition roots and a `/health` route. Health
    reports process liveness, SQLite reachability, configured recording-path
    writability, and dependency status as separate fields; it does not expose
@@ -173,41 +233,19 @@ complete. Do not commit every sub-step separately.
 4. Establish an `AppError`/error-response contract with stable codes, HTTP
    statuses, and JSON bodies. Put a no-op authentication middleware at one
    composition seam without implementing authentication.
-5. Document and verify `npm ci`, `npm run build`, `npm test`, and local startup.
+5. Document and verify `npm ci`, `npm run build`, the two functional suites via
+   `npm test`, and local startup.
 6. Add the containerized release build. It must use the same Node 24 major and
-   Debian/glibc family as the target, run `better-sqlite3` smoke and test suites
-   inside the container, and package `dist/`, production `node_modules`,
-   migrations, package metadata, systemd files, and the installer. Include a
+   Debian/glibc family as the target, load `better-sqlite3` and run the two
+   project functional suites inside the container, and package `dist/`,
+   production `node_modules`, migrations, package metadata, systemd files, and
+   the installer. Include a
    manifest containing git revision, build time, `linux/amd64`, Node version and
    module ABI, dependency-lock digest, and artifact checksum. Do not package
-   source-only development dependencies or secrets.
-
-Release-build test blocks:
-
-```sh
-# test/release-artifact.bats
-setup() { load "test_helper"; }
-
-@test "builds a linux/amd64 artifact in the Debian 13 container"
-@test "runs tests and loads better-sqlite3 before packaging"
-@test "records revision, Node ABI, lock digest, and checksum in the manifest"
-@test "contains production runtime files and excludes dev dependencies and secrets"
-@test "is reproducible from the same revision and lockfile"
-```
-
-Test file initialization and blocks:
-
-```ts
-// test/health.test.ts
-import assert from "node:assert/strict";
-import test, { describe } from "node:test";
-import { createApp } from "../src/app.js";
-
-describe("GET /health", () => {
-  test("reports healthy dependencies without revealing private paths");
-  test("reports a degraded dependency with a stable error code");
-});
-```
+   source-only development dependencies or secrets. Treat successful container
+   build, functional suite, native-binding load, manifest inspection, and
+   checksum verification as build smoke checks rather than a separate test
+   suite.
 
 ### 0.2 Add the durable SQLite model
 
@@ -227,23 +265,6 @@ describe("GET /health", () => {
 5. Implement repository operations in explicit transactions. Status updates
    from reconciliation use compare-and-set predicates so API cancellation or a
    concurrent tick cannot be overwritten.
-
-Test file initialization and blocks:
-
-```ts
-// test/database.test.ts
-import assert from "node:assert/strict";
-import test, { describe } from "node:test";
-import { openDatabase } from "../src/db/connection.js";
-import { migrate } from "../src/db/migrate.js";
-
-describe("SQLite persistence", () => {
-  test("enables WAL, foreign keys, and busy timeout");
-  test("persists recordings across reopened connections");
-  test("rejects invalid status values and dangling cookie references");
-  test("compare-and-set updates cannot overwrite cancellation");
-});
-```
 
 ### 0.3 Implement the Phase 0 HTTP API
 
@@ -277,38 +298,6 @@ describe("SQLite persistence", () => {
 8. Add curl examples covering health, cookie upload/list/delete, recording
    create/list/get/live stop-time changes/cancel, validation errors, and status
    filtering.
-
-Test file initialization and blocks:
-
-```ts
-// test/api.test.ts
-import assert from "node:assert/strict";
-import test, { describe } from "node:test";
-import { createApp } from "../src/app.js";
-
-describe("recordings API", () => {
-  test("schedules and returns a recording");
-  test("lists recordings filtered by status");
-  test("returns one recording or a stable not-found error");
-  test("extends and shortens stop_at for a running recording");
-  test("persists cancellation before immediately stopping its derived unit");
-  test("retains cancellation when immediate systemd stop fails");
-  test("immediately stops when stop_at moves to now or the past");
-  test("rejects invalid windows, URLs, qualities, and cookie IDs");
-});
-
-describe("cookies API", () => {
-  test("uploads a cookie file atomically and returns metadata only");
-  test("lists cookie metadata without contents or paths");
-  test("deletes an unreferenced cookie and its file");
-  test("rejects traversal names, oversize uploads, and referenced deletion");
-});
-
-describe("private reconciler API", () => {
-  test("accepts compare-and-set transitions over the Unix socket");
-  test("is absent from the public TCP listener");
-});
-```
 
 ### 0.4 Implement one reconciliation tick
 
@@ -355,47 +344,6 @@ describe("private reconciler API", () => {
 6. Make the process finite: reconcile once, report a structured summary, and
    exit nonzero only for operational failure. The systemd timer owns cadence
    and overlap prevention.
-
-Test file initialization and blocks:
-
-```ts
-// test/reconcile-once.test.ts
-import assert from "node:assert/strict";
-import test, { describe } from "node:test";
-import { reconcileOnce } from "../src/reconciler/reconcile-once.js";
-
-describe("reconcileOnce", () => {
-  test("launches a due scheduled recording and claims recording state");
-  test("adopts an already-live unit after a launch/claim interruption");
-  test("leaves an active recording unit unchanged");
-  test("refreshes a stale backstop after a durable stop_at extension");
-  test("relaunches an active-window recording after a reboot");
-  test("finalizes a current-boot unit that ended early");
-  test("authoritatively stops an elapsed recording before finalizing it");
-  test("stops and finalizes an elapsed live unit left scheduled after a claim interruption");
-  test("does not finalize when systemd cannot confirm the unit stopped");
-  test("marks an elapsed never-started recording missed");
-  test("stops a live cancelled recording without changing cancellation");
-  test("does not overwrite a concurrent API cancellation");
-  test("fails safely when the private transition API is unavailable");
-});
-```
-
-```ts
-// test/streamlink-command.test.ts
-import assert from "node:assert/strict";
-import test, { describe } from "node:test";
-import { buildStreamlinkArgs } from "../src/reconciler/streamlink-command.js";
-
-describe("streamlink transient-unit invocation", () => {
-  test("uses the required live, retry, cookie, quality, and stdout arguments");
-  test("appends binary stdout to the derived TS path and journals stderr");
-  test("derives the unit and output names only from a canonical recording ID");
-  test("sets a bounded post-stop safety margin and hardening properties");
-  test("hides application state and exposes only the selected cookie");
-  test("rejects unsafe URLs, paths, qualities, IDs, and durations");
-});
-```
 
 ### 0.5 Add the auditable root installation boundary
 
@@ -447,24 +395,11 @@ describe("streamlink transient-unit invocation", () => {
     rollback. Database backup/restore is explicit because migrations are
     forward-only.
 
-Installation-script tests and checks:
-
-```sh
-# test/install-root.bats
-setup() { load "test_helper"; }
-
-@test "refuses to run without root"
-@test "fails clearly when a required executable is unavailable"
-@test "creates the intended user, groups, directories, and modes"
-@test "is idempotent on a second run"
-@test "does not add sudoers or polkit policy"
-@test "does not modify firewall, Tailscale, DNS, or reverse-proxy configuration"
-```
-
-Run the destructive/provisioning cases in a disposable Debian 13 VM or
-container with mocked systemd commands; perform the final user-manager and
-network-listener checks on `irae-sheeta` only when the operator runs the
-reviewed script as root.
+Do not build an automated test harness for the installer. Review the short
+script, run it on `irae-sheeta`, inspect its results, rerun it once to smoke-check
+idempotency, and debug concrete failures in place. The script's own preflight
+and post-install checks cover user/group creation, paths and modes, service
+startup, networking non-interference, and the harmless user-unit probe.
 
 ### 0.6 End-to-end acceptance on `irae-sheeta`
 
