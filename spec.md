@@ -1,6 +1,6 @@
 # YouTube Live Recorder — Architecture Spec
 
-Input spec for a CLI coding agent. **Architecture only — do not implement yet.**
+Architecture specification. **Architecture only — do not implement yet.**
 Build in phase order. Phase 0 must be usable via `curl` and reliably record today; everything else iterates on top.
 
 ## Goal & principles

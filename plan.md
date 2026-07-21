@@ -215,7 +215,14 @@ t.test("recovers an active window after reboot and marks missed windows");
 Each numbered section is a larger implementation block and is committed when
 complete. Do not commit every sub-step separately.
 
+Complexity labels estimate implementation and integration risk for the whole
+block: **Easy** is conventional project work with few external interactions;
+**Medium** crosses process, persistence, operating-system, or deployment
+boundaries. No planned block currently warrants a **Hard** label.
+
 ### 0.1 Bootstrap the Node/TypeScript application
+
+**Complexity: Easy.**
 
 1. Create the package, lockfile, strict TypeScript configuration, build output
    convention, and configuration loader. Require Node 24 at startup. Default
@@ -249,6 +256,8 @@ complete. Do not commit every sub-step separately.
 
 ### 0.2 Add the durable SQLite model
 
+**Complexity: Easy.**
+
 1. Add a forward-only migration mechanism and the `recordings` and `cookies`
    tables. Include the Phase 0 subset of spec fields plus internal
    `last_started_boot_id` and timestamps. Explicitly exclude `final_path` and
@@ -267,6 +276,9 @@ complete. Do not commit every sub-step separately.
    concurrent tick cannot be overwritten.
 
 ### 0.3 Implement the Phase 0 HTTP API
+
+**Complexity: Medium.** The HTTP behavior is conventional; live unit control,
+atomic cookie storage, and the private transition socket add integration work.
 
 1. Implement `POST /recordings`, `GET /recordings?status=`,
    `GET /recordings/:id`, `PATCH /recordings/:id`, and
@@ -300,6 +312,9 @@ complete. Do not commit every sub-step separately.
    filtering.
 
 ### 0.4 Implement one reconciliation tick
+
+**Complexity: Medium.** The state rules are explicit, but systemd interaction,
+reboot recovery, and interruption-safe convergence require careful integration.
 
 1. Define `SystemdClient` with `listRecordingUnits`, `startRecording`,
    `stopRecording`, and `inspectRecordingUnit`. Use direct argv spawning with no
@@ -346,6 +361,9 @@ complete. Do not commit every sub-step separately.
    and overlap prevention.
 
 ### 0.5 Add the auditable root installation boundary
+
+**Complexity: Medium.** The script is short, but it crosses Unix accounts,
+filesystem permissions, system and user service managers, and release layout.
 
 1. Write `scripts/install-root.sh` as an idempotent script with explicit
    configuration variables/flags. It must stop on errors, require UID 0,
@@ -403,6 +421,9 @@ startup, networking non-interference, and the harmless user-unit probe.
 
 ### 0.6 End-to-end acceptance on `irae-sheeta`
 
+**Complexity: Medium.** This is mostly procedural verification, with real
+systemd, Streamlink, networking, and reboot behavior in scope.
+
 1. Start the local Docker daemon, run `scripts/build-release.sh` for
    `linux/amd64`, verify its checksum, copy the versioned tarball and checksum,
    review the root script, install only runtime OS dependencies, and have the
@@ -443,6 +464,8 @@ before its phase and commit completed blocks, not their sub-steps.
 
 ### Phase 1 — candidates and log access
 
+**Complexity: Easy.**
+
 1. Decide and document the candidate import format; retain JSON as the default
    unless the operator chooses otherwise.
 2. Add the candidates migration, repository, bulk import/list/delete API, and
@@ -453,6 +476,9 @@ before its phase and commit completed blocks, not their sub-steps.
    log tailing through curl.
 
 ### Phase 2 — remux and file lifecycle
+
+**Complexity: Medium.** It adds another reconciled systemd job type and durable
+file-state transitions.
 
 1. Decide `mkv` versus `mp4` and reconciler-driven versus `.path` triggering;
    do not encode either choice before it is made. Prefer MKV only as the stated
@@ -467,6 +493,9 @@ before its phase and commit completed blocks, not their sub-steps.
 
 ### Phase 3 — web client and stable media URLs
 
+**Complexity: Medium.** The UI is conventional; the chosen media-serving
+boundary and VLC-compatible URLs supply the integration risk.
+
 1. Decide Express static delivery, a media service, or nginx/Samba based on VLC
    range-request support, configured-network exposure, operational burden, and
    deletion ownership. Record the choice before implementation.
@@ -476,6 +505,9 @@ before its phase and commit completed blocks, not their sub-steps.
    that no browser-only workflow is required for any operation.
 
 ### Phase 4 — deferred controls
+
+**Complexity: Medium.** Authentication and deletion policy are ordinary
+features but need careful access and data-loss boundaries.
 
 1. Choose retention semantics before adding cleanup.
 2. Implement authentication at the existing middleware seam and preserve curl
