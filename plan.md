@@ -6,9 +6,10 @@ the Phase 0 recording path.
 
 ## Decisions made for Phase 0
 
-- Use Node.js 24 LTS, TypeScript compiled to JavaScript, npm, Express, and the
-  built-in `node:sqlite` module. Production runs compiled JavaScript with
-  `node`; it does not run TypeScript or require Deno/Bun.
+- Use Node.js 24 LTS, TypeScript compiled to JavaScript, npm, Express, and
+  `better-sqlite3`. Production runs compiled JavaScript with `node`; it does
+  not run TypeScript or require Deno/Bun. Keep SQL parameterized and explicit
+  behind small repositories rather than adding an ORM.
 - Run the API and reconciler as the same dedicated, non-login Unix account,
   `rec-live-tronic`. Neither process nor any recorder runs as the SSH user or
   as root.
@@ -17,8 +18,10 @@ the Phase 0 recording path.
   account; the reconciler uses `systemd-run --user` and `systemctl --user` to
   manage unprivileged `rec-<id>.service` transient units. Do not add sudoers or
   polkit rules.
-- Express listens on loopback. Tailscale Serve proxies the API into the
-  tailnet. Do not bind the unauthenticated API to all interfaces.
+- Express has a configurable listen host and initially binds `0.0.0.0` so the
+  same service is reachable over the home LAN and Tailscale. The application
+  does not configure or require Tailscale, a reverse proxy, DNS, or a particular
+  firewall. Those remain deployment policy, including on a future VPS.
 - Keep the API as the sole SQLite writer. The reconciler reads SQLite directly
   and sends status compare-and-set requests to an API listener on a private Unix
   socket. Public routes never accept arbitrary status changes.
@@ -62,9 +65,11 @@ Read-only inspection of `irae-sheeta` on 2026-07-21 found:
   `/home/irae/.local/bin/streamlink`; it works interactively but is owned by and
   coupled to the human account, so production will not use that installation.
 - Node.js, npm, Corepack, and the SQLite CLI were not found.
-- Tailscale 1.98.9 is active and enabled. The node is
+- Tailscale 1.98.9 is active and enabled. The initial deployment can be reached
+  through the node
   `irae-sheeta.tailc9708.ts.net`, and no Tailscale Serve configuration exists
-  yet. Unprivileged user namespaces are enabled, which supports the proposed
+  or is needed. This is host context, not an application dependency.
+  Unprivileged user namespaces are enabled, which supports the proposed
   user-unit hardening.
 - The root filesystem has about 139 GB free. `/tmp` is a small tmpfs and must
   not hold recordings.
@@ -76,6 +81,10 @@ Read-only inspection of `irae-sheeta` on 2026-07-21 found:
 The operator installs these before running the repository's installer:
 
 - Node.js 24 LTS, including npm.
+- A `better-sqlite3` version supporting Node 24, installed by the locked npm
+  dependency set and packaged in the Debian x86-64 release tarball. The target
+  server does not install a compiler, Python build tooling, or development
+  headers.
 - pipx plus a root-managed global Streamlink installation, initially pinned to
   the already-proven 8.4.0 release and exposed as
   `/usr/local/bin/streamlink`. Provision its environment under `/opt/pipx`
@@ -84,10 +93,8 @@ The operator installs these before running the repository's installer:
   the service account cannot traverse. It is executable by all local users but
   its code and environment are writable only by root. Do not reuse or alter
   the human-owned installation under `/home/irae/.local`.
-- SQLite CLI for diagnosis and backup checks. The application itself uses
-  Node's built-in SQLite module.
-- Tailscale, connected to the intended tailnet, with permission for root to
-  configure Tailscale Serve.
+- SQLite CLI for diagnosis and backup checks. `better-sqlite3` supplies the
+  application's SQLite binding.
 - `ffmpeg` is not needed until Phase 2 and is already present.
 
 The root installer verifies versions and capabilities; it does not silently
@@ -101,14 +108,20 @@ The repository currently contains no application scaffold. Phase 0 creates:
   dependencies and `build`, `test`, `dev`, `start`, `reconcile:once`, and
   `db:migrate` scripts.
 - `tsconfig.json`: strict Node ESM compilation from `src/` to `dist/`.
-- `.env.example`: non-secret configuration names and safe local defaults.
-- `src/config.ts`: loads and validates ports, paths, streamlink executable,
-  timer/runtime limits, and the private socket path.
+- `Dockerfile.build`: reproducible Debian 13 x86-64 build/test/release
+  environment with the compiler toolchain needed by native npm modules.
+- `scripts/build-release.sh`: invokes Docker for `linux/amd64`, runs clean
+  install/build/tests, prunes development dependencies, verifies the native
+  SQLite binding, and emits the installable tarball plus checksum.
+- `.env.example`: non-secret configuration names, including initial
+  `REC_LIVE_HOST=0.0.0.0` and `REC_LIVE_PORT`, plus safe local defaults.
+- `src/config.ts`: loads and validates the listen host/port, paths, streamlink
+  executable, timer/runtime limits, and the private socket path.
 - `src/app.ts`: exports `createApp(deps)`, including the future authentication
   middleware seam, public Phase 0 routes, consistent errors, and request
   validation.
 - `src/server.ts`: opens the database, creates services, and starts the public
-  loopback and private Unix-socket listeners.
+  configured TCP listener plus the private Unix-socket listener.
 - `src/db/connection.ts`: opens SQLite, enables WAL, foreign keys, busy timeout,
   and safe file modes.
 - `src/db/migrate.ts` and `migrations/001-phase-zero.sql`: idempotent schema
@@ -146,9 +159,13 @@ complete. Do not commit every sub-step separately.
 ### 0.1 Bootstrap the Node/TypeScript application
 
 1. Create the package, lockfile, strict TypeScript configuration, build output
-   convention, and configuration loader. Require Node 24 at startup.
-2. Add Express and multipart support as runtime dependencies; keep SQLite,
-   UUID generation, test runner, and fetch on Node built-ins where practical.
+   convention, and configuration loader. Require Node 24 at startup. Default
+   `REC_LIVE_HOST` to `0.0.0.0` while allowing any valid operator-selected
+   listen address without application-level network policy.
+2. Add Express, multipart support, and `better-sqlite3` as runtime dependencies;
+   keep UUID generation, test runner, and fetch on Node built-ins where
+   practical. Install dependencies on Debian x86-64 rather than copying native
+   `node_modules` from a macOS development machine.
 3. Add the empty app/server composition roots and a `/health` route. Health
    reports process liveness, SQLite reachability, configured recording-path
    writability, and dependency status as separate fields; it does not expose
@@ -157,6 +174,26 @@ complete. Do not commit every sub-step separately.
    statuses, and JSON bodies. Put a no-op authentication middleware at one
    composition seam without implementing authentication.
 5. Document and verify `npm ci`, `npm run build`, `npm test`, and local startup.
+6. Add the containerized release build. It must use the same Node 24 major and
+   Debian/glibc family as the target, run `better-sqlite3` smoke and test suites
+   inside the container, and package `dist/`, production `node_modules`,
+   migrations, package metadata, systemd files, and the installer. Include a
+   manifest containing git revision, build time, `linux/amd64`, Node version and
+   module ABI, dependency-lock digest, and artifact checksum. Do not package
+   source-only development dependencies or secrets.
+
+Release-build test blocks:
+
+```sh
+# test/release-artifact.bats
+setup() { load "test_helper"; }
+
+@test "builds a linux/amd64 artifact in the Debian 13 container"
+@test "runs tests and loads better-sqlite3 before packaging"
+@test "records revision, Node ABI, lock digest, and checksum in the manifest"
+@test "contains production runtime files and excludes dev dependencies and secrets"
+@test "is reproducible from the same revision and lockfile"
+```
 
 Test file initialization and blocks:
 
@@ -175,8 +212,10 @@ describe("GET /health", () => {
 ### 0.2 Add the durable SQLite model
 
 1. Add a forward-only migration mechanism and the `recordings` and `cookies`
-   tables. Include the spec fields plus internal `last_started_boot_id` and
-   timestamps. Store times as validated UTC instants and return RFC 3339.
+   tables. Include the Phase 0 subset of spec fields plus internal
+   `last_started_boot_id` and timestamps. Explicitly exclude `final_path` and
+   every mux-only column until the Phase 2 migration. Store times as validated
+   UTC instants and return RFC 3339.
 2. Constrain statuses to `scheduled`, `recording`, `recorded`, `cancelled`,
    `failed`, and `missed`; Phase 0 does not introduce candidates, mux fields,
    or final-file state.
@@ -305,6 +344,9 @@ describe("private reconciler API", () => {
    - elapsed `recording`: always issue `systemctl --user stop` for a live unit,
      wait for it to become inactive within a bound, then mark `recorded` for a
      non-empty regular file or `failed` otherwise;
+   - elapsed `scheduled` with a live unit after a launch/claim interruption:
+     stop it, await inactivity, then mark `recorded` for a non-empty regular
+     file or `failed` otherwise;
    - elapsed `scheduled` without a valid file: mark `missed`;
    - `cancelled` with a live unit: stop it and keep `cancelled`.
 5. Send every mutation through the private API. A failed compare-and-set is a
@@ -330,6 +372,7 @@ describe("reconcileOnce", () => {
   test("relaunches an active-window recording after a reboot");
   test("finalizes a current-boot unit that ended early");
   test("authoritatively stops an elapsed recording before finalizing it");
+  test("stops and finalizes an elapsed live unit left scheduled after a claim interruption");
   test("does not finalize when systemd cannot confirm the unit stopped");
   test("marks an elapsed never-started recording missed");
   test("stops a live cancelled recording without changing cancellation");
@@ -360,10 +403,13 @@ describe("streamlink transient-unit invocation", () => {
    configuration variables/flags. It must stop on errors, require UID 0,
    resolve concrete paths before destructive operations, and print each
    material action. It does not use curl-to-shell or install packages.
-2. Preflight Node/npm, SQLite diagnostics, the root-owned
+2. Preflight Node, the release checksum/manifest, matching `linux/amd64` and
+   Node module ABI, the packaged `better-sqlite3` native binding, SQLite
+   diagnostics, and the root-owned
    `/usr/local/bin/streamlink` path, its `/opt/pipx` target and pinned version,
-   systemd version/features, Tailscale state, disk space, and the configured
-   human account. Verify the app was built and tests passed before installation.
+   systemd version/features, disk space, and the configured human account.
+   Verify the artifact records a successful container build/test before
+   installation. Do not compile npm dependencies on the target host.
 3. Create the non-login `rec-live-tronic` system account and private primary
    group. Create `rec-media`; optionally add the named human account to it only
    when direct media access is requested.
@@ -389,12 +435,12 @@ describe("streamlink transient-unit invocation", () => {
    API and reconciler receive their dedicated account's user-bus environment
    so either can control only that account's units. The reconciler has no
    general write access to application state or media paths.
-8. Migrate SQLite as the service account with umask `0077`. Configure Tailscale
-   Serve to proxy the loopback listener, preserving any unrelated Serve config
-   or refusing to proceed if it cannot do so safely.
+8. Migrate SQLite as the service account with umask `0077`. Write the configured
+   listen host/port without changing Tailscale, firewall, DNS, reverse-proxy, or
+   other host networking configuration.
 9. Reload systemd, enable/start the API and timer, and verify health, modes,
    ownership, timer execution, private socket access, user transient-unit
-   control, and tailnet-only reachability. Make no sudoers or polkit change.
+   control, and the configured listen address. Make no sudoers or polkit change.
 10. Document an upgrade path that installs a new versioned release, runs
     forward migrations, atomically changes the release selector, restarts the
     API/timer, health-checks, and retains the prior release for application
@@ -412,18 +458,20 @@ setup() { load "test_helper"; }
 @test "creates the intended user, groups, directories, and modes"
 @test "is idempotent on a second run"
 @test "does not add sudoers or polkit policy"
-@test "does not overwrite unrelated Tailscale Serve configuration"
+@test "does not modify firewall, Tailscale, DNS, or reverse-proxy configuration"
 ```
 
 Run the destructive/provisioning cases in a disposable Debian 13 VM or
 container with mocked systemd commands; perform the final user-manager and
-Tailscale checks on `irae-sheeta` only when the operator runs the reviewed
-script as root.
+network-listener checks on `irae-sheeta` only when the operator runs the
+reviewed script as root.
 
 ### 0.6 End-to-end acceptance on `irae-sheeta`
 
-1. Build and test locally, copy a versioned artifact, review the root script,
-   install required OS dependencies, and have the operator run the script.
+1. Start the local Docker daemon, run `scripts/build-release.sh` for
+   `linux/amd64`, verify its checksum, copy the versioned tarball and checksum,
+   review the root script, install only runtime OS dependencies, and have the
+   operator run the script.
 2. Upload a non-production test cookie through curl; confirm its response and
    disk permissions do not reveal or overexpose it.
 3. Schedule two overlapping short recordings with curl, using distinct cookies
@@ -442,11 +490,12 @@ script as root.
 8. Let a window expire and verify a playable `.ts`, `recorded` status, no live
    unit, and persistence after API restart. Verify an elapsed never-started
    window becomes `missed`.
-9. From a tailnet client, exercise health/create/list/get/patch/cancel. Confirm the
-   listener is unreachable through non-Tailscale interfaces.
-10. Record the exact installed versions, service account UID, paths, Tailscale
-   URL, backup command, and diagnostic commands in the deployment section of
-   `README.md`.
+9. From the current Tailscale connection, exercise
+   health/create/list/get/patch/cancel against the API's `0.0.0.0` listener.
+   When physically available, repeat the reachability check from the home LAN.
+10. Record the exact installed versions, service account UID, paths, configured
+    listener, current Tailscale and LAN URLs, backup command, and diagnostic
+    commands in the deployment section of `README.md`.
 
 Phase 0 is complete only when these acceptance checks pass and the system can
 record reliably without an interactive SSH session, the human user's account,
@@ -484,8 +533,8 @@ before its phase and commit completed blocks, not their sub-steps.
 ### Phase 3 — web client and stable media URLs
 
 1. Decide Express static delivery, a media service, or nginx/Samba based on VLC
-   range-request support, tailnet exposure, operational burden, and deletion
-   ownership. Record the choice before implementation.
+   range-request support, configured-network exposure, operational burden, and
+   deletion ownership. Record the choice before implementation.
 2. Build the UI solely as an API client: schedule form, current/history lists,
    candidate inbox, file list, and live stop-time editing.
 3. Verify stable VLC-openable URLs, range requests, concurrent recordings, and
@@ -516,4 +565,9 @@ before its phase and commit completed blocks, not their sub-steps.
   non-empty regular output file exists.
 - Root is needed only for reviewed installation/upgrade and host provisioning,
   never for routine API, reconciliation, or recording work.
+- Network attachment is configurable deployment policy. The application does
+  not require or modify Tailscale, LAN routing, firewall rules, reverse proxies,
+  or VPS networking. Before any unauthenticated VPS listener is made publicly
+  reachable, the operator must supply an external access boundary or implement
+  the planned authentication seam.
 - Open decisions in `spec.md` remain open until their owning phase.

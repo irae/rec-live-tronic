@@ -10,11 +10,14 @@ Build in phase order. Phase 0 must be usable via `curl` and reliably record toda
 - **systemd = scheduler, supervisor, and stopper.** The app owns almost no process state.
 - **Recordings survive daemon/app restarts and reboots.** State is durable in SQLite; systemd units are disposable and rebuilt from SQLite.
 - API is complete on its own; the web UI is only a client of the API.
-- No auth for now (runs on Tailscale only), but keep it addable later (single middleware seam).
+- No auth for now, but keep it addable later through a single middleware seam.
+  The listen host is configuration, initially `0.0.0.0` so LAN and Tailscale
+  clients both work. Tailscale, LAN routing, firewalls, reverse proxies, and a
+  future VPS are deployment concerns rather than architectural dependencies.
 
 ## Components
 
-- **SQLite (WAL mode)** — recordings, cookies, candidates. WAL so the API writes while the reconciler reads without blocking.
+- **SQLite (WAL mode, accessed with `better-sqlite3`)** — recordings, cookies, candidates. WAL so the API writes while the reconciler reads without blocking.
 - **HTTP API (Node + Express)** — the only writer to SQLite in normal operation. curl-first.
 - **Reconciler daemon** — thin loop (run as a systemd timer/service, tick every 30–60s). Holds no in-memory state worth losing. Diffs SQLite ⇄ live `rec-*` systemd units and acts.
 - **streamlink** — the recorder binary. Writes `.ts` (append-safe; killable mid-write and still playable).
@@ -40,11 +43,12 @@ that immediate action is interrupted.
 
 Reconciler tick responsibilities:
 1. `scheduled` & `start_at <= now < stop_at` & no unit → launch, mark `recording`.
-2. `recording` & `now >= stop_at` → `systemctl stop`, mark `recorded`.
-3. `recording` & unit gone early (crash/stream ended) → mark `recorded` (file exists) or `failed`.
-4. `cancelled` with a live unit → `systemctl stop`, mark `cancelled`.
-5. Reboot recovery (rule 1 covers it) / `missed` when window fully elapsed with no file.
-6. *(Phase 2)* `recorded` & not yet muxed → enqueue remux.
+2. elapsed `scheduled` with a live unit (launch/claim interruption) → stop it, then mark `recorded` when a file exists or `failed` otherwise.
+3. `recording` & `now >= stop_at` → `systemctl stop`, mark `recorded`.
+4. `recording` & unit gone early (crash/stream ended) → mark `recorded` (file exists) or `failed`.
+5. `cancelled` with a live unit → `systemctl stop`, mark `cancelled`.
+6. Reboot recovery (rule 1 covers it) / `missed` when window fully elapsed with no file or launch evidence.
+7. *(Phase 2)* `recorded` & not yet muxed → enqueue remux.
 
 ## Data model (fields, not schema)
 
@@ -81,7 +85,7 @@ Ops: `GET /health` · `GET /recordings/:id/log` (tail streamlink output).
 
 ## Open decisions — resolve before the relevant phase (do NOT invent)
 
-- ⚠ **File sharing / network URL (Phase 2–3):** static Express file route vs. a media container (e.g. Jellyfin) vs. plain nginx/Samba. Must yield a VLC-openable URL on the Tailscale net. *Left undecided — sketch only.*
+- ⚠ **File sharing / network URL (Phase 2–3):** static Express file route vs. a media container (e.g. Jellyfin) vs. plain nginx/Samba. Must yield a VLC-openable URL on the configured network. *Left undecided — sketch only.*
 - ⚠ **Final container (Phase 2):** `mkv` vs `mp4` (remux `-c copy`; if audio/video codecs aren't mp4-safe, mkv is the safe default).
 - ⚠ **Transcode trigger (Phase 2):** reconciler-driven vs. a systemd `.path` unit watching the output dir.
 - ⚠ **Candidate import format (Phase 1):** JSON array vs. CSV vs. ICS. Default assumption: JSON for MVP.
