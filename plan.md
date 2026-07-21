@@ -39,6 +39,11 @@ the Phase 0 recording path.
   it invokes `systemctl --user stop rec-<id>` and waits for the unit to become
   inactive before changing durable status. `RuntimeMaxSec` is only systemd's
   dead-reconciler backstop. Streamlink is never trusted to enforce `stop_at`.
+- Live control is part of Phase 0. The API derives `rec-<id>.service` from the
+  durable ID rather than storing a PID. `PATCH stop_at` commits SQLite before
+  adjusting the live unit's backstop; cancellation commits first and then
+  immediately asks systemd to stop the unit instead of waiting for the next
+  30-second reconciliation tick.
 - Add an internal `last_started_boot_id` recording field. It distinguishes a
   transient unit lost during reboot (relaunch within the active window) from a
   unit that ended on the current boot (finalize according to file presence).
@@ -110,8 +115,8 @@ The repository currently contains no application scaffold. Phase 0 creates:
   migration entry point and the Phase 0 schema.
 - `src/recordings/repository.ts`: `RecordingRepository` reads plus atomic
   create/cancel/status compare-and-set operations.
-- `src/recordings/service.ts`: schedule validation and public recording use
-  cases.
+- `src/recordings/service.ts`: schedule validation, live stop-time changes,
+  immediate cancellation, and other public recording use cases.
 - `src/cookies/repository.ts` and `src/cookies/service.ts`: metadata and safe,
   atomic cookie-file lifecycle.
 - `src/reconciler/reconcile-once.ts`: exports deterministic
@@ -204,8 +209,11 @@ describe("SQLite persistence", () => {
 ### 0.3 Implement the Phase 0 HTTP API
 
 1. Implement `POST /recordings`, `GET /recordings?status=`,
-   `GET /recordings/:id`, and `DELETE /recordings/:id`. In Phase 0, delete is a
-   durable cancellation request; it never deletes the row or media file.
+   `GET /recordings/:id`, `PATCH /recordings/:id`, and
+   `DELETE /recordings/:id`. Phase 0 PATCH can retitle/reschedule a future
+   recording and extend or shorten a running recording's `stop_at`; it cannot
+   mutate status. Delete is a durable cancellation request and never deletes
+   the row or media file.
 2. Validate HTTPS YouTube URLs against an explicit hostname allowlist, require
    `start_at < stop_at`, apply a documented quality allowlist/default, and
    reject unknown cookie IDs. Generate opaque canonical IDs server-side.
@@ -216,11 +224,20 @@ describe("SQLite persistence", () => {
    file with exclusive/no-follow semantics, fsync, set `0600`, atomically
    rename to the generated cookie ID, and only then commit metadata. Roll back
    both sides on failure.
-5. Add private Unix-socket routes used only by the reconciler to claim
+5. After committing cancellation for a live recording, immediately stop the
+   derived user unit and report whether stop confirmation succeeded. If this
+   action is interrupted or fails, keep the durable cancellation and let the
+   next reconciliation tick converge. Never roll cancellation back.
+6. After committing a live `stop_at` change, update the unit's systemd
+   `RuntimeMaxSec` backstop. Prove the systemd 257 runtime-property update on the
+   target; if unsupported, stop and relaunch the same append-mode unit with a
+   recalculated cap. A stop time at or before now takes the immediate stop path.
+7. Add private Unix-socket routes used only by the reconciler to claim
    transitions with expected status/update version. Do not expose these routes
    on the TCP listener.
-6. Add curl examples covering health, cookie upload/list/delete, recording
-   create/list/get/cancel, validation errors, and status filtering.
+8. Add curl examples covering health, cookie upload/list/delete, recording
+   create/list/get/live stop-time changes/cancel, validation errors, and status
+   filtering.
 
 Test file initialization and blocks:
 
@@ -234,7 +251,10 @@ describe("recordings API", () => {
   test("schedules and returns a recording");
   test("lists recordings filtered by status");
   test("returns one recording or a stable not-found error");
-  test("cancels without deleting history");
+  test("extends and shortens stop_at for a running recording");
+  test("persists cancellation before immediately stopping its derived unit");
+  test("retains cancellation when immediate systemd stop fails");
+  test("immediately stops when stop_at moves to now or the past");
   test("rejects invalid windows, URLs, qualities, and cookie IDs");
 });
 
@@ -261,8 +281,9 @@ describe("private reconciler API", () => {
    validated URL/quality, `--stdout`, and progress disabled. Configure systemd
    to append stdout to `<recordings-root>/<id>.ts` and send stderr to the
    journal. Insert `--` at the systemd-run command boundary.
-3. Start `rec-<id>.service` with `--user`, `--collect`, remaining-window
-   `RuntimeMaxSec`, `KillMode=control-group`, bounded stop timeout, no restart,
+3. Start `rec-<id>.service` with `--user`, `--collect`, a `RuntimeMaxSec` equal
+   to the remaining window plus a configurable extension safety margin,
+   `KillMode=control-group`, bounded stop timeout, no restart,
    restrictive umask, filesystem restrictions, no-new-privileges, and only the
    address families streamlink needs. Make application state and the recordings
    tree inaccessible inside the recorder's mount namespace; bind only the
@@ -274,7 +295,8 @@ describe("private reconciler API", () => {
    idempotent rules:
    - due `scheduled` with no unit: launch first, then compare-and-set to
      `recording` with the current boot ID; if the unit already exists, adopt it;
-   - active-window `recording` with a unit: leave it running;
+   - active-window `recording` with a unit: leave it running after ensuring its
+     backstop cannot preempt the current durable `stop_at`;
    - active-window `recording` without a unit whose stored boot ID differs:
      relaunch with the remaining time, appending to the existing `.ts` through
      systemd's output sink;
@@ -304,6 +326,7 @@ describe("reconcileOnce", () => {
   test("launches a due scheduled recording and claims recording state");
   test("adopts an already-live unit after a launch/claim interruption");
   test("leaves an active recording unit unchanged");
+  test("refreshes a stale backstop after a durable stop_at extension");
   test("relaunches an active-window recording after a reboot");
   test("finalizes a current-boot unit that ended early");
   test("authoritatively stops an elapsed recording before finalizing it");
@@ -325,7 +348,7 @@ describe("streamlink transient-unit invocation", () => {
   test("uses the required live, retry, cookie, quality, and stdout arguments");
   test("appends binary stdout to the derived TS path and journals stderr");
   test("derives the unit and output names only from a canonical recording ID");
-  test("sets remaining RuntimeMaxSec and hardening properties");
+  test("sets a bounded post-stop safety margin and hardening properties");
   test("hides application state and exposes only the selected cookie");
   test("rejects unsafe URLs, paths, qualities, IDs, and durations");
 });
@@ -363,8 +386,9 @@ describe("streamlink transient-unit invocation", () => {
    strict filesystem access, private devices/tmp, and kernel/control-group
    protections. Grant the API explicit write access only to
    `/var/lib/rec-live-tronic` and its systemd-created runtime directory. The
-   reconciler receives only its own user-bus environment and no general write
-   access to application state or media paths.
+   API and reconciler receive their dedicated account's user-bus environment
+   so either can control only that account's units. The reconciler has no
+   general write access to application state or media paths.
 8. Migrate SQLite as the service account with umask `0077`. Configure Tailscale
    Serve to proxy the loopback listener, preserving any unrelated Serve config
    or refusing to proceed if it cannot do so safely.
@@ -404,20 +428,23 @@ script as root.
    disk permissions do not reveal or overexpose it.
 3. Schedule two overlapping short recordings with curl, using distinct cookies
    if available. Confirm two `rec-*` user units and two growing `.ts` files.
-4. Cancel one recording. Confirm the unit stops and the durable status remains
-   `cancelled`; confirm the other continues.
-5. Schedule a short recording, stop/restart the dedicated user manager or reboot
+4. Extend one live recording beyond its original stop time and verify it keeps
+   running. Then shorten it and verify systemd stops it at the new durable
+   deadline within the documented tolerance.
+5. Cancel the other recording. Confirm the API persists `cancelled` and stops
+   the unit immediately without waiting for a timer tick.
+6. Schedule a short recording, stop/restart the dedicated user manager or reboot
    during its window, and confirm reconciliation resumes appending to the same
-   `.ts` with the remaining runtime cap.
-6. Stop the API briefly, let a reconciliation tick fail, restart the API, and
+   `.ts` with a recalculated safety cap.
+7. Stop the API briefly, let a reconciliation tick fail, restart the API, and
    confirm the next tick converges without corrupting state or duplicating a
    unit.
-7. Let a window expire and verify a playable `.ts`, `recorded` status, no live
+8. Let a window expire and verify a playable `.ts`, `recorded` status, no live
    unit, and persistence after API restart. Verify an elapsed never-started
    window becomes `missed`.
-8. From a tailnet client, exercise health/create/list/get/cancel. Confirm the
+9. From a tailnet client, exercise health/create/list/get/patch/cancel. Confirm the
    listener is unreachable through non-Tailscale interfaces.
-9. Record the exact installed versions, service account UID, paths, Tailscale
+10. Record the exact installed versions, service account UID, paths, Tailscale
    URL, backup command, and diagnostic commands in the deployment section of
    `README.md`.
 
@@ -430,24 +457,16 @@ sudo, or a root-running application process.
 These are separate larger blocks. Resolve each listed open decision immediately
 before its phase and commit completed blocks, not their sub-steps.
 
-### Phase 1 — candidates and live control
+### Phase 1 — candidates and log access
 
 1. Decide and document the candidate import format; retain JSON as the default
    unless the operator chooses otherwise.
 2. Add the candidates migration, repository, bulk import/list/delete API, and
    atomic promote-to-recording operation.
-3. Add `PATCH /recordings/:id` for title/window changes. Validate changes
-   against current status. On extension, the next tick updates the live unit's
-   `RuntimeMaxSec` with `systemctl --user set-property --runtime`; first prove
-   that systemd 257 accepts that property change in the target-host acceptance
-   test. If it does not, the defined fallback is to stop and relaunch the same
-   append-mode unit with the new remaining cap. Shortening continues to use the
-   authoritative stop check. Explicitly test extension beyond the original
-   cap, shortening, the relaunch fallback, and a stop time moved into the past.
-4. Add `GET /recordings/:id/log` using the dedicated user's journal for the
+3. Add `GET /recordings/:id/log` using the dedicated user's journal for the
    derived unit name, with bounded tail/follow behavior and disconnect cleanup.
-5. Acceptance-test candidate promotion, concurrent promotion protection, live
-   extend/shorten, and log tailing through curl.
+4. Acceptance-test candidate promotion, concurrent promotion protection, and
+   log tailing through curl.
 
 ### Phase 2 — remux and file lifecycle
 
@@ -488,6 +507,8 @@ before its phase and commit completed blocks, not their sub-steps.
 - Recorder processes run only under the dedicated account's user manager.
 - Scheduled stopping is owned by reconciler-issued systemd stop operations;
   `RuntimeMaxSec` is a backstop, not the normal stopping mechanism.
+- `stop_at` and cancellation intent live in SQLite; a PID never becomes durable
+  application state, and immediate API control is followed by reconciliation.
 - No request data is evaluated by a shell or used as a unit/path identifier.
 - Cookies and database files are private to the service UID; media group access
   is read-only and opt-in.

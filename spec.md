@@ -25,12 +25,18 @@ Build in phase order. Phase 0 must be usable via `curl` and reliably record toda
 
 The reconciler never babysits child processes. For each due recording it launches a **systemd transient unit**:
 
-- Launch: `systemd-run --unit=rec-<id> --collect --property=RuntimeMaxSec=<safety_cap> streamlink … --http-cookie-file <cookie> "<url>" <quality> -o <dir>/<id>.ts`
+- Launch: `systemd-run --user --unit=rec-<id> --collect --property=RuntimeMaxSec=<safety_cap> --property=StandardOutput=append:<dir>/<id>.ts streamlink … --http-cookie-file <cookie> --stdout "<url>" <quality>`
 - **Stop (authoritative):** reconciler runs `systemctl stop rec-<id>` when `now >= stop_at`. This is what lets the UI extend/shorten a running recording by editing `stop_at`.
-- **Stop (backstop):** `RuntimeMaxSec` is a generous hard cap so a dead reconciler can't leave a recording running forever.
+- **Stop (backstop):** `RuntimeMaxSec` extends beyond the current `stop_at` by a configurable safety margin so a delayed stop remains possible, while a dead reconciler still can't leave a recording running forever. A live `stop_at` extension also updates this backstop (or safely relaunches the append-mode unit if the host cannot update it in place).
 - SIGTERM → streamlink finalizes the `.ts` cleanly; even a hard kill leaves a playable file.
 
-**Self-healing:** transient units don't survive reboot, and that's fine. On every tick the reconciler relaunches any recording still inside its `[start_at, stop_at)` window that has no live unit, setting `RuntimeMaxSec = stop_at - now`. If the box was down across a window, that recording is simply marked `missed`.
+**Self-healing:** transient units don't survive reboot, and that's fine. On every tick the reconciler relaunches any recording still inside its `[start_at, stop_at)` window that has no live unit, setting `RuntimeMaxSec = stop_at - now + safety_margin`. If the box was down across a window, that recording is simply marked `missed`.
+
+The API derives the live unit from the durable recording ID; it never stores or
+controls a PID. `PATCH stop_at` writes SQLite first and refreshes the unit
+backstop. Cancelling a running recording writes SQLite and immediately asks
+systemd to stop the unit, while reconciliation remains the convergence path if
+that immediate action is interrupted.
 
 Reconciler tick responsibilities:
 1. `scheduled` & `start_at <= now < stop_at` & no unit → launch, mark `recording`.
@@ -67,8 +73,8 @@ Ops: `GET /health` · `GET /recordings/:id/log` (tail streamlink output).
 
 ## Build phases
 
-- **Phase 0 (today, MVP):** SQLite + Express API + reconciler + streamlink. Schedule/list/cancel recordings and upload cookies via curl. Records `.ts` reliably. No UI, no transcode.
-- **Phase 1:** candidates (import schedule → promote), live extend/shorten, log tailing.
+- **Phase 0 (today, MVP):** SQLite + Express API + reconciler + streamlink. Schedule/list/cancel recordings, extend/shorten `stop_at` live, and upload cookies via curl. Records `.ts` reliably. No UI, no transcode.
+- **Phase 1:** candidates (import schedule → promote) and log tailing.
 - **Phase 2:** transcode worker `.ts → final container` (as `mux-<id>` systemd units, concurrency-capped) + file delete.
 - **Phase 3:** web UI (schedule form, history, candidate inbox, file list + network URLs).
 - **Phase 4 (deferred):** auth middleware, retention/cleanup policy.
