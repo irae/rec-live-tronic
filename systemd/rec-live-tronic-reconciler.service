@@ -1,0 +1,35 @@
+[Unit]
+Description=rec-live-tronic one-shot reconciler
+After=rec-live-tronic-api.service user@@SERVICE_UID@.service
+Wants=user@@SERVICE_UID@.service
+
+[Service]
+Type=oneshot
+User=rec-live-tronic
+Group=rec-live-tronic
+UMask=0077
+WorkingDirectory=/opt/rec-live-tronic/current
+EnvironmentFile=/etc/rec-live-tronic/rec-live-tronic.env
+Environment=XDG_RUNTIME_DIR=/run/user/@SERVICE_UID@
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@SERVICE_UID@/bus
+ExecStart=/usr/bin/node /opt/rec-live-tronic/current/dist/reconciler/main.js
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+LockPersonality=yes
+ReadOnlyPaths=/var/lib/rec-live-tronic /run/rec-live-tronic
