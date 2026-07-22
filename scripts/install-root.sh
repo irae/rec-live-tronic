@@ -44,7 +44,7 @@ while [ "$#" -gt 0 ]; do
 done
 
 [ "$(id -u)" -eq 0 ] || die "must be run as root"
-for command_name in awk basename chown chmod cp curl df diff dirname find getent grep groupadd head id install ln loginctl mv readlink rm runuser sed sha256sum stat systemctl systemd-run tail uname useradd usermod; do require_command "$command_name"; done
+for command_name in awk basename chown chmod cp curl df diff dirname find getent grep groupadd head id install ln loginctl mv readlink rm runuser sed sha256sum sleep stat systemctl systemd-run tail uname useradd usermod; do require_command "$command_name"; done
 [ -x "$NODE" ] || die "missing Node executable: $NODE"
 RELEASE_DIR=$(CDPATH= cd -- "$RELEASE_DIR" && pwd)
 [ -f "$RELEASE_DIR/manifest.json" ] || die "release manifest is missing"
@@ -155,7 +155,14 @@ systemctl is-active --quiet "$SERVICE-api.service"; systemctl is-active --quiet 
 test "$(stat -c '%U:%G %a' "$DATA_DIR")" = "$SERVICE_USER:$SERVICE_GROUP 700" || die "incorrect data directory mode"
 test "$(stat -c '%U:%G %a' "$DATA_DIR/cookies")" = "$SERVICE_USER:$SERVICE_GROUP 700" || die "incorrect cookies directory mode"
 test "$(stat -c '%U:%G %a' "$RECORDINGS_DIR")" = "$SERVICE_USER:$MEDIA_GROUP 2750" || die "incorrect recordings directory mode"
-test -S /run/rec-live-tronic/api.sock || die "private API socket was not created"
+private_socket=$(sed -n 's/^REC_LIVE_PRIVATE_SOCKET=//p' "$CONFIG_DIR/rec-live-tronic.env" | tail -n 1); private_socket=${private_socket:-/run/rec-live-tronic/api.sock}
+socket_attempt=0
+while [ "$socket_attempt" -lt 30 ] && [ ! -S "$private_socket" ]; do sleep 1; socket_attempt=$((socket_attempt + 1)); done
+if [ ! -S "$private_socket" ]; then
+  systemctl --no-pager --full status "$SERVICE-api.service" >&2 || true
+  command -v journalctl >/dev/null 2>&1 && journalctl --no-pager -u "$SERVICE-api.service" -n 100 >&2 || true
+  die "private API socket was not created: $private_socket"
+fi
 run_user_bus systemctl --user list-units --all --no-legend >/dev/null
 host=$(sed -n 's/^REC_LIVE_HOST=//p' "$CONFIG_DIR/rec-live-tronic.env" | tail -n 1); host=${host:-0.0.0.0}
 port=$(sed -n 's/^REC_LIVE_PORT=//p' "$CONFIG_DIR/rec-live-tronic.env" | tail -n 1); port=${port:-8787}
