@@ -37,7 +37,7 @@ function delay(milliseconds: number): Promise<void> { return new Promise((resolv
 export class UserSystemdClient implements SystemdClient {
   async listRecordingUnits(): Promise<Set<string>> {
     const result = await run("systemctl", ["--user", "list-units", "--type=service", "--all", "--no-legend", "--plain", "--no-pager", "rec-*.service"]);
-    if (result.code !== 0) throw new Error("systemctl could not list recording units");
+    if (result.code !== 0) throw new Error(`systemctl could not list recording units: ${result.stderr}`);
     const candidates: string[] = [];
     for (const line of result.stdout.split("\n")) {
       const name = line.trim().split(/\s+/, 1)[0];
