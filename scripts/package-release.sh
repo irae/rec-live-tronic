@@ -2,71 +2,27 @@
 set -eu
 
 output_dir=${1:-/out}
-version=$(node -p "require('/release-source/package.json').version")
-release_name="rec-live-tronic-${version}"
 stage=$(mktemp -d)
 trap 'rm -rf "$stage"' EXIT
-mkdir -p "$output_dir" "$stage/$release_name"
+mkdir -p "$output_dir"
 
-cp -R /release-source/dist /release-source/node_modules /release-source/migrations /release-source/systemd "$stage/$release_name/"
-mkdir -p "$stage/$release_name/scripts"
-cp /release-source/scripts/install-root.sh "$stage/$release_name/scripts/"
-chmod 0755 "$stage/$release_name/scripts/install-root.sh"
-cp /release-source/package.json /release-source/package-lock.json "$stage/$release_name/"
-cp /release-source/.env.example "$stage/$release_name/"
+# deps package: node_modules and package-lock.json
+mkdir -p "$stage/deps"
+cp -R /release-source/node_modules /release-source/package-lock.json "$stage/deps/"
+tar -C "$stage" -czf "$output_dir/rec-live-tronic-deps.tar.gz" "deps"
 
-lock_digest=$(sha256sum /release-source/package-lock.json | awk '{print $1}')
-build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-node_version=$(node --version)
-npm_version=$(npm --version)
-node_abi=$(node -p 'process.versions.modules')
-embedded_manifest="$stage/$release_name/manifest.json"
-sidecar_manifest="$output_dir/${release_name}-manifest.json"
-cat > "$embedded_manifest" <<EOF
-{
-  "git_revision": "${GIT_REVISION}",
-  "build_time": "${build_time}",
-  "platform": "linux/amd64",
-  "base_image_digest": "${BASE_IMAGE_DIGEST}",
-  "debian_release": "trixie",
-  "node_version": "${node_version}",
-  "npm_version": "${npm_version}",
-  "node_module_abi": "${node_abi}",
-  "package_lock_sha256": "${lock_digest}",
-  "build_succeeded": true,
-  "functional_tests_succeeded": true,
-  "native_binding_loaded": true
-}
-EOF
+# web package: dist, migrations, package.json, .env.example, systemd service, install script
+mkdir -p "$stage/web/systemd"
+cp -R /release-source/dist /release-source/migrations "$stage/web/"
+cp /release-source/package.json /release-source/.env.example "$stage/web/"
+cp /release-source/systemd/rec-live-tronic-api.service "$stage/web/systemd/"
+cp /release-source/scripts/install-root.sh "$stage/web/"
+chmod 0755 "$stage/web/install-root.sh"
+tar -C "$stage" -czf "$output_dir/rec-live-tronic-web.tar.gz" "web"
 
-tarball="$output_dir/${release_name}-linux-amd64.tar.gz"
-tar -C "$stage" -czf "$tarball" "$release_name"
-checksum=$(sha256sum "$tarball" | awk '{print $1}')
-printf '%s  %s\n' "$checksum" "$(basename "$tarball")" > "$tarball.sha256"
-artifact_size=$(wc -c < "$tarball" | tr -d ' ')
-cat > "$sidecar_manifest" <<EOF
-{
-  "git_revision": "${GIT_REVISION}",
-  "build_time": "${build_time}",
-  "platform": "linux/amd64",
-  "base_image_digest": "${BASE_IMAGE_DIGEST}",
-  "debian_release": "trixie",
-  "node_version": "${node_version}",
-  "npm_version": "${npm_version}",
-  "node_module_abi": "${node_abi}",
-  "package_lock_sha256": "${lock_digest}",
-  "build_succeeded": true,
-  "functional_tests_succeeded": true,
-  "native_binding_loaded": true,
-  "artifact": "$(basename "$tarball")",
-  "artifact_sha256": "${checksum}",
-  "artifact_size_bytes": ${artifact_size},
-  "manifest_in_artifact": "${release_name}/manifest.json"
-}
-EOF
-
-tar -tzf "$tarball" >/dev/null
-for required_path in "$release_name/.env.example" "$release_name/manifest.json" "$release_name/scripts/install-root.sh" "$release_name/systemd/rec-live-tronic-api.service" "$release_name/systemd/rec-live-tronic-reconciler.service" "$release_name/systemd/rec-live-tronic-reconciler.timer"; do
-  tar -tzf "$tarball" | grep -Fx "$required_path" >/dev/null || { printf '%s\n' "missing packaged file: $required_path" >&2; exit 1; }
-done
-(cd "$output_dir" && sha256sum -c "$(basename "$tarball").sha256")
+# reconciler package: dist, package.json, systemd service and timer
+mkdir -p "$stage/reconciler/systemd"
+cp -R /release-source/dist "$stage/reconciler/"
+cp /release-source/package.json "$stage/reconciler/"
+cp /release-source/systemd/rec-live-tronic-reconciler.service /release-source/systemd/rec-live-tronic-reconciler.timer "$stage/reconciler/systemd/"
+tar -C "$stage" -czf "$output_dir/rec-live-tronic-reconciler.tar.gz" "reconciler"

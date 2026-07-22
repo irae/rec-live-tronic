@@ -163,7 +163,7 @@ direct read/write media access.
 
 ```sh
 scp rec-live-tronic-*.tar.gz remote:/tmp/
-ssh -t remote sudo /tmp/rec-live-tronic-web.tar.gz web/scripts/install-root.sh --force --media-user irae
+ssh -t remote 'mkdir -p /tmp/install-$$ && cd /tmp/install-$$ && tar -xzf /tmp/rec-live-tronic-deps.tar.gz && tar -xzf /tmp/rec-live-tronic-web.tar.gz && tar -xzf /tmp/rec-live-tronic-reconciler.tar.gz && sudo bash web/install-root.sh --force --media-user irae --deps-artifact /tmp/rec-live-tronic-deps.tar.gz --web-artifact /tmp/rec-live-tronic-web.tar.gz --reconciler-artifact /tmp/rec-live-tronic-reconciler.tar.gz'
 ```
 
 Or use the automated `install-sheeta.sh` script (update `REMOTE_HOST` and
@@ -227,18 +227,17 @@ sqlite3 /var/lib/rec-live-tronic/rec-live-tronic.sqlite '.backup /root/rec-live-
 systemctl start rec-live-tronic-api.service
 ```
 
-Verify and extract the next release, then run its installer. It installs a new
-root-owned `/opt/rec-live-tronic/releases/<version>` tree, migrates the
-database as the service account, atomically repoints `current`, and restarts
-the API and timer while retaining every prior release tree.
+For a full release update (code and dependencies), run the installer with all
+three artifacts as in the initial installation. For code-only updates (when
+`package-lock.json` has not changed), use the faster `deploy-fast.sh` script
+to update only the `web` and/or `reconciler` packages:
 
 ```sh
-cd rec-live-tronic-NEXT_VERSION
-sudo scripts/install-root.sh
+sudo scripts/deploy-fast.sh --web-artifact /path/to/rec-live-tronic-web.tar.gz
 curl http://127.0.0.1:8787/health
 ```
 
-Application-code rollback can repoint `current` to a retained release and
-restart the API/timer, but it cannot reverse an already-applied migration.
-Restore the explicit SQLite backup only when the release’s migration history is
-compatible with that database snapshot.
+The installer and `deploy-fast.sh` replace each package directory in place
+without versioning or `current` symlinks. Rollback requires reverting to an
+earlier release and running its installation step again; note that database
+migrations are forward-only and cannot be reversed.

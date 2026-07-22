@@ -11,13 +11,13 @@ RestartSec=2s
 User=rec-live-tronic
 Group=rec-live-tronic
 UMask=0077
-WorkingDirectory=/opt/rec-live-tronic/current
+WorkingDirectory=/opt/rec-live-tronic/reconciler
 EnvironmentFile=/etc/rec-live-tronic/rec-live-tronic.env
 Environment=REC_LIVE_PRIVATE_SOCKET=/run/rec-live-tronic/api.sock
 Environment=XDG_RUNTIME_DIR=/run/user/@SERVICE_UID@
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@SERVICE_UID@/bus
 ExecStartPre=/usr/bin/test -S ${REC_LIVE_PRIVATE_SOCKET}
-ExecStart=/usr/local/bin/node /opt/rec-live-tronic/current/dist/reconciler/main.js
+ExecStart=/usr/local/bin/node /opt/rec-live-tronic/reconciler/dist/reconciler/main.js
 NoNewPrivileges=yes
 CapabilityBoundingSet=
 AmbientCapabilities=
