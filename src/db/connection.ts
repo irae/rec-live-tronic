@@ -18,7 +18,7 @@ function pragmaValue(result: unknown, name: string): unknown {
 
 export function enforceDatabaseFileModes(databasePath: string): void {
   for (const path of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
-    if (existsSync(path)) chmodSync(path, 0o600);
+    if (existsSync(path)) chmodSync(path, 0o660);
   }
 }
 
@@ -30,9 +30,9 @@ export function openDatabase(databasePath: string, options: DatabaseConnectionOp
   }
 
   if (!readonly) {
-    process.umask(0o077);
-    mkdirSync(dirname(databasePath), { recursive: true, mode: 0o700 });
-    chmodSync(dirname(databasePath), 0o700);
+    process.umask(0o007);
+    mkdirSync(dirname(databasePath), { recursive: true, mode: 0o770 });
+    chmodSync(dirname(databasePath), 0o770);
   }
 
   const database = new Database(databasePath, { readonly, fileMustExist: readonly });

@@ -26,7 +26,7 @@ export function buildTransientProperties(recording: Recording, config: Config, r
     "Restart=no",
     "UMask=0027",
     `StandardOutput=append:${recording.tsPath}`,
-    "StandardError=journal",
+    `StandardError=append:${config.recordingsDir}/${recording.id}.log`,
     "NoNewPrivileges=yes",
     "PrivateTmp=yes",
     "ProtectSystem=strict",

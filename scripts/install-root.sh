@@ -26,7 +26,7 @@ usage() {
 Usage: install-root.sh [--release-dir PATH] [--artifact TARBALL] [--media-user USER] [--force]
 
 Run as root from an extracted, verified release directory. The optional media
-user receives read-only access through rec-media; omit it to keep media private.
+user receives read/write access through rec-media; omit it to keep media private.
 The script never installs packages, changes sudo/polkit, or changes networking.
 EOF
 }
@@ -117,8 +117,8 @@ root_owned_tree "$release_path"
 log "create configuration and application paths"
 install -d -o root -g "$SERVICE_GROUP" -m 0750 "$CONFIG_DIR"
 [ -f "$CONFIG_DIR/rec-live-tronic.env" ] || install -o root -g "$SERVICE_GROUP" -m 0640 "$RELEASE_DIR/.env.example" "$CONFIG_DIR/rec-live-tronic.env"
-install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 "$DATA_DIR" "$DATA_DIR/cookies"
-install -d -o "$SERVICE_USER" -g "$MEDIA_GROUP" -m 2750 "$RECORDINGS_DIR"
+install -d -o "$SERVICE_USER" -g "$MEDIA_GROUP" -m 0770 "$DATA_DIR" "$DATA_DIR/cookies"
+install -d -o "$SERVICE_USER" -g "$MEDIA_GROUP" -m 2770 "$RECORDINGS_DIR"
 
 log "install hardened systemd units"
 for unit in "$SERVICE-api.service" "$SERVICE-reconciler.service" "$SERVICE-reconciler.timer"; do
@@ -163,9 +163,9 @@ systemctl enable --now "$SERVICE-reconciler.timer"
 
 log "post-install verification"
 systemctl is-active --quiet "$SERVICE-api.service"; systemctl is-active --quiet "$SERVICE-reconciler.timer"
-test "$(stat -c '%U:%G %a' "$DATA_DIR")" = "$SERVICE_USER:$SERVICE_GROUP 700" || die "incorrect data directory mode"
-test "$(stat -c '%U:%G %a' "$DATA_DIR/cookies")" = "$SERVICE_USER:$SERVICE_GROUP 700" || die "incorrect cookies directory mode"
-test "$(stat -c '%U:%G %a' "$RECORDINGS_DIR")" = "$SERVICE_USER:$MEDIA_GROUP 2750" || die "incorrect recordings directory mode"
+test "$(stat -c '%U:%G %a' "$DATA_DIR")" = "$SERVICE_USER:$MEDIA_GROUP 770" || die "incorrect data directory mode"
+test "$(stat -c '%U:%G %a' "$DATA_DIR/cookies")" = "$SERVICE_USER:$MEDIA_GROUP 770" || die "incorrect cookies directory mode"
+test "$(stat -c '%U:%G %a' "$RECORDINGS_DIR")" = "$SERVICE_USER:$MEDIA_GROUP 2770" || die "incorrect recordings directory mode"
 if ! wait_for_private_socket; then
   systemctl --no-pager --full status "$SERVICE-api.service" >&2 || true
   command -v journalctl >/dev/null 2>&1 && journalctl --no-pager -u "$SERVICE-api.service" -n 100 >&2 || true
