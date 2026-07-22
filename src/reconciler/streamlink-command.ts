@@ -24,7 +24,7 @@ export function buildTransientProperties(recording: Recording, config: Config, r
     "KillMode=control-group",
     `TimeoutStopSec=${config.stopTimeoutSeconds}`,
     "Restart=no",
-    "UMask=0027",
+    "UMask=0007",
     `StandardOutput=append:${recording.tsPath}`,
     `StandardError=append:${config.recordingsDir}/${recording.id}.log`,
     "NoNewPrivileges=yes",

@@ -441,21 +441,17 @@ systemd, Streamlink, networking, and reboot behavior in scope.
    deadline within the documented tolerance.
 5. Cancel the other recording. Confirm the API persists `cancelled` and stops
    the unit immediately without waiting for a timer tick.
-6. Schedule a short recording, stop/restart the dedicated user manager or reboot
-   during its window, and confirm reconciliation resumes appending to the same
-   `.ts` with a recalculated safety cap.
-7. Stop the API briefly, let a reconciliation tick fail, restart the API, and
+6. Stop the API briefly, let a reconciliation tick fail, restart the API, and
    confirm the next tick converges without corrupting state or duplicating a
    unit.
-8. Let a window expire and verify a playable `.ts`, `recorded` status, no live
+7. Let a window expire and verify a playable `.ts`, `recorded` status, no live
    unit, and persistence after API restart. Verify an elapsed never-started
    window becomes `missed`.
-9. From the current Tailscale connection, exercise
-   health/create/list/get/patch/cancel against the API's `0.0.0.0` listener.
-   When physically available, repeat the reachability check from the home LAN.
-10. Record the exact installed versions, service account UID, paths, configured
-    listener, current Tailscale and LAN URLs, backup command, and diagnostic
-    commands in the deployment section of `README.md`.
+8. Exercise health/create/list/get/patch/cancel against the API's `0.0.0.0`
+   listener over SSH.
+9. Record the exact installed versions, service account UID, paths, configured
+   listener, current Tailscale and LAN URLs, backup command, and diagnostic
+   commands in the deployment section of `README.md`.
 
 Phase 0 is complete only when these acceptance checks pass and the system can
 record reliably without an interactive SSH session, the human user's account,
@@ -558,6 +554,16 @@ features but need careful access and data-loss boundaries.
    support.
 3. Add explicit dry-run, audit, race, and recovery tests for retention before
    enabling deletion automation.
+
+### Lowest priority — reboot recovery acceptance test
+
+Deferred past every other phase above; the reconciler's reboot-recovery logic
+(rule 1 in the reconciler tick responsibilities) already exists in code, this
+is only the live verification step.
+
+1. Schedule a short recording, stop/restart the dedicated user manager or
+   reboot `irae-sheeta` during its window, and confirm reconciliation resumes
+   appending to the same `.ts` with a recalculated safety cap.
 
 ## Operational invariants
 
