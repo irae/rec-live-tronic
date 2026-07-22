@@ -45,6 +45,10 @@ function errorHandler(error: unknown, _request: Request, response: Response, _ne
     response.status(error.status).json({ error: { code: error.code, message: error.message } });
     return;
   }
+  if (error instanceof SyntaxError && (error as { status?: number }).status === 400) {
+    response.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Request body must be valid JSON" } });
+    return;
+  }
   response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Internal server error" } });
 }
 
