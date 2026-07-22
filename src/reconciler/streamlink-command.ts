@@ -35,8 +35,8 @@ export function buildTransientProperties(recording: Recording, config: Config, r
     "ProtectKernelModules=yes",
     "ProtectControlGroups=yes",
     "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-    "ReadWritePaths=/dev/null",
-    `InaccessiblePaths=${config.dataDir} ${config.recordingsDir}`,
+    `ReadWritePaths=${config.recordingsDir}`,
+    `InaccessiblePaths=${config.dataDir}`,
   ];
   if (recording.cookiePath) properties.push(`BindReadOnlyPaths=${recording.cookiePath}:/run/rec-live-tronic/streamlink-cookie`);
   return properties;

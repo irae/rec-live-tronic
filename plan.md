@@ -26,8 +26,10 @@ the Phase 0 recording path.
   and sends status compare-and-set requests to an API listener on a private Unix
   socket. Public routes never accept arbitrary status changes.
 - Store private state under `/var/lib/rec-live-tronic` and recordings under
-  `/srv/rec-live-tronic/recordings`. A read-only `rec-media` group provides
-  optional direct SSH/SFTP access without granting access to SQLite or cookies.
+  `/srv/rec-live-tronic/recordings`. Phase 0 gives the optional `rec-media`
+  group direct read-only media access without granting access to SQLite or
+  cookies. The next shared-intranet block below intentionally expands this
+  policy.
 - Generate recording IDs in the API and derive unit names and output paths only
   from those IDs. Titles, URLs, quality strings, uploaded filenames, and other
   request data never become command fragments or filesystem paths.
@@ -328,12 +330,11 @@ reboot recovery, and interruption-safe convergence require careful integration.
    to the remaining window plus a configurable extension safety margin,
    `KillMode=control-group`, bounded stop timeout, no restart,
    restrictive umask, filesystem restrictions, no-new-privileges, and only the
-   address families streamlink needs. Make application state and the recordings
-   tree inaccessible inside the recorder's mount namespace; bind only the
-   selected cookie read-only at a fixed private path. The user manager opens
-   the derived TS append sink before executing Streamlink, so Streamlink itself
-   needs no directory write access. Clamp all calculated durations and validate
-   these sandbox properties on the target host.
+   address families streamlink needs. Make application state inaccessible inside
+   the recorder's mount namespace; grant the selected recordings output tree
+   explicit write access and bind only the selected cookie at a fixed path.
+   Clamp all calculated durations and validate these sandbox properties on the
+   target host.
 4. On each tick, take a database snapshot and a live-unit snapshot, then apply
    idempotent rules:
    - due `scheduled` with no unit: launch first, then compare-and-set to
@@ -397,7 +398,9 @@ filesystem permissions, system and user service managers, and release layout.
    Both application units use the dedicated UID, empty capability bounds,
    strict filesystem access, private devices/tmp, and kernel/control-group
    protections. Grant the API explicit write access only to
-   `/var/lib/rec-live-tronic` and its systemd-created runtime directory. The
+   `/var/lib/rec-live-tronic` and its systemd-created runtime directory. Grant
+   transient recorder units explicit write access to the recordings output
+   tree while keeping SQLite control state inaccessible. The
    API and reconciler receive their dedicated account's user-bus environment
    so either can control only that account's units. The reconciler has no
    general write access to application state or media paths.
@@ -460,7 +463,8 @@ sudo, or a root-running application process.
 ### Next step — shared intranet operator access
 
 **Complexity: Easy.** This is an intentional deployment policy for the trusted
-intranet host, not a public-service security boundary.
+intranet host, not a public-service security boundary. This block is pending;
+Phase 0 remains read-only for media users until it is implemented.
 
 1. Treat `rec-media` as the shared operational group. `--media-user irae` and
    any additional media users receive read/write access to the shared
@@ -546,8 +550,9 @@ features but need careful access and data-loss boundaries.
 - `stop_at` and cancellation intent live in SQLite; a PID never becomes durable
   application state, and immediate API control is followed by reconciliation.
 - No request data is evaluated by a shell or used as a unit/path identifier.
-- Cookies and database files are private to the service UID; media group access
-  is read-only and opt-in.
+- SQLite control files and cookies are private to the service UID in Phase 0;
+  the current `rec-media` media access is read-only and opt-in. The next
+  shared-intranet block expands that access deliberately.
 - A recording is never reported complete until its unit is stopped/gone and a
   non-empty regular output file exists.
 - Root is needed only for reviewed installation/upgrade and host provisioning,

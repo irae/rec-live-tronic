@@ -10,6 +10,7 @@ import { CookieRepository } from "../../src/cookies/repository.js";
 import { RecorderService } from "../../src/api/service.js";
 import type { SystemdClient } from "../../src/systemd/client.js";
 import { createPrivateTransitionClient, reconcileOnce } from "../../src/reconciler/reconcile-once.js";
+import { buildTransientProperties } from "../../src/reconciler/streamlink-command.js";
 
 class SystemdStub implements SystemdClient {
   readonly live = new Set<string>();
@@ -62,6 +63,12 @@ t.teardown(async () => { await running.close(); await rm(root, { recursive: true
 
 t.test("records a scheduled window and stops it at the durable deadline", async (t) => {
   const created = await createRecording("2030-01-01T00:00:00Z", "2030-01-01T00:10:00Z");
+  const scheduled = recordings.getById(created.id);
+  if (!scheduled) throw new Error("missing scheduled recording");
+  const properties = buildTransientProperties(scheduled, config, 60);
+  t.ok(properties.includes(`ReadWritePaths=${config.recordingsDir}`));
+  t.ok(properties.includes(`InaccessiblePaths=${config.dataDir}`));
+  t.notMatch(properties.join("\n"), new RegExp(`InaccessiblePaths=.*${config.recordingsDir}`));
   await tick("2030-01-01T00:01:00Z");
   t.same(systemd.starts, [`${created.id}.service`]);
   t.equal(systemd.caps.get(`${created.id}.service`), 660);

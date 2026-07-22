@@ -24,6 +24,18 @@ Build in phase order. Phase 0 must be usable via `curl` and reliably record toda
 - **ffmpeg -c copy** — remux `.ts` → final container. *(Phase 2)*
 - **Web UI** — schedule/history/candidates/files. *(Phase 3)*
 
+## Trusted intranet access (next deployment block)
+
+The planned deployment is an intranet service on a host whose operators already
+have SSH access. Once this block is implemented, `rec-media` will be the shared
+operational group: `irae` and other explicitly assigned media users will be able
+to read and write recordings, logs, cookies, and other operational artifacts
+through the filesystem. SQLite control/state
+files and transient systemd internals remain outside that shared tree. This is
+deployment policy for the trusted host, not a public-service security boundary;
+public exposure still requires the deferred authentication/access-boundary
+decision.
+
 ## How recording works (the core mechanism)
 
 The reconciler never babysits child processes. For each due recording it launches a **systemd transient unit**:
