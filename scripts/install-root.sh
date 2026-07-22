@@ -51,7 +51,8 @@ RELEASE_DIR=$(CDPATH= cd -- "$RELEASE_DIR" && pwd)
 
 json_string() { sed -n "s/^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*\"\([^\"]*\)\"[,]*[[:space:]]*$/\1/p" "$RELEASE_DIR/manifest.json" | head -n 1; }
 json_true() { grep -Eq "^[[:space:]]*\"$1\"[[:space:]]*:[[:space:]]*true[,]*[[:space:]]*$" "$RELEASE_DIR/manifest.json"; }
-root_owned_tree() { find "$1" -xdev \( ! -user root -o -perm /022 \) -print -quit | grep -q . && die "non-root-owned or group/world-writable path: $1"; }
+first_unsafe_path() { find "$1" -xdev ! -type l \( ! -user root -o -perm /022 \) -print -quit; }
+root_owned_tree() { offender=$(first_unsafe_path "$1"); [ -z "$offender" ] || die "non-root-owned or group/world-writable path: $offender"; }
 
 log "preflight: release manifest and target platform"
 [ "$(json_string platform)" = linux/amd64 ] || die "release is not linux/amd64"
@@ -68,7 +69,8 @@ log "preflight: host dependencies and capacity"
 streamlink_target=$(readlink -f "$STREAMLINK")
 case "$streamlink_target" in "$PIPX_HOME"/*) ;; *) die "Streamlink target must be beneath $PIPX_HOME" ;; esac
 [ "$(stat -c %U "$STREAMLINK")" = root ] && [ "$(stat -c %U "$streamlink_target")" = root ] || die "Streamlink must be root-owned"
-find "$PIPX_HOME" -xdev \( ! -user root -o -perm /022 \) -print -quit | grep -q . && die "$PIPX_HOME must be root-owned and not group/world-writable"
+offender=$(first_unsafe_path "$PIPX_HOME")
+[ -z "$offender" ] || die "$PIPX_HOME contains a non-root-owned or group/world-writable path: $offender"
 "$STREAMLINK" --version 2>&1 | grep -Eq "Streamlink[[:space:]]+$EXPECTED_STREAMLINK_VERSION([[:space:]]|$)" || die "expected Streamlink $EXPECTED_STREAMLINK_VERSION"
 command -v sqlite3 >/dev/null 2>&1 || die "SQLite CLI is required for diagnostics"
 sqlite3 ':memory:' 'pragma journal_mode=WAL; select 1;' >/dev/null || die "SQLite diagnostics failed"
