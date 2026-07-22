@@ -40,7 +40,7 @@ decision.
 
 The reconciler never babysits child processes. For each due recording it launches a **systemd transient unit**:
 
-- Launch: `systemd-run --user --unit=rec-<id> --collect --property=RuntimeMaxSec=<safety_cap> --property=StandardOutput=append:<dir>/<id>.ts streamlink … --http-cookie-file <cookie> --stdout "<url>" <quality>`
+- Launch: `systemd-run --user --unit=rec-<id> --collect --property=RuntimeMaxSec=<safety_cap> --property=StandardOutput=append:<dir>/<id>.ts streamlink … --http-cookies-file <cookie> --stdout "<url>" <quality>`
 - **Stop (authoritative):** reconciler runs `systemctl stop rec-<id>` when `now >= stop_at`. This is what lets the UI extend/shorten a running recording by editing `stop_at`.
 - **Stop (backstop):** `RuntimeMaxSec` extends beyond the current `stop_at` by a configurable safety margin so a delayed stop remains possible, while a dead reconciler still can't leave a recording running forever. A live `stop_at` extension also updates this backstop (or safely relaunches the append-mode unit if the host cannot update it in place).
 - SIGTERM → streamlink finalizes the `.ts` cleanly; even a hard kill leaves a playable file.
@@ -83,7 +83,7 @@ Ops: `GET /health` · `GET /recordings/:id/log` (tail streamlink output).
 
 ## Recorder invocation notes
 
-- Base flags: `--hls-live-restart`, `--retry-streams 5`, `--retry-max 0`, `--http-cookie-file <cookie>`, output `.ts`.
+- Base flags: `--hls-live-restart`, `--retry-streams 5`, `--retry-max 0`, `--http-cookies-file <cookie>`, output `.ts`.
 - **Do not** route through the old `yt-dlp --downloader ffmpeg` path — that caused expiring-token 403s. streamlink is primary; keep yt-dlp only as a manual fallback.
 - Cookie file chosen per-recording via `cookie_id`; two recordings can use two different cookie files at once.
 

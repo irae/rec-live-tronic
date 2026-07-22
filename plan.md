@@ -322,7 +322,7 @@ reboot recovery, and interruption-safe convergence require careful integration.
    `stopRecording`, and `inspectRecordingUnit`. Use direct argv spawning with no
    shell. Treat systemctl output as untrusted and validate unit names.
 2. Build streamlink argv with `--hls-live-restart`, `--retry-streams 5`,
-   `--retry-max 0`, the resolved `--http-cookie-file` when selected, the
+   `--retry-max 0`, the resolved `--http-cookies-file` when selected, the
    validated URL/quality, `--stdout`, and progress disabled. Configure systemd
    to append stdout to `<recordings-root>/<id>.ts` and send stderr to the
    journal. Insert `--` at the systemd-run command boundary.

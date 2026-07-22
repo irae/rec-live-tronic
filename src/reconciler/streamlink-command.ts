@@ -12,7 +12,7 @@ function safeUrl(value: string): string {
 export function buildStreamlinkArgs(recording: Recording): string[] {
   if (!quality.test(recording.quality)) throw new TypeError("Invalid recorder quality");
   const args = ["--hls-live-restart", "--retry-streams", "5", "--retry-max", "0", "--progress", "no"];
-  if (recording.cookiePath) args.push("--http-cookie-file", "/run/rec-live-tronic/streamlink-cookie");
+  if (recording.cookiePath) args.push("--http-cookies-file", "/run/rec-live-tronic/streamlink-cookie");
   args.push("--stdout", safeUrl(recording.url), recording.quality);
   return args;
 }
