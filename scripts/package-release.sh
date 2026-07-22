@@ -64,4 +64,4 @@ cat > "$sidecar_manifest" <<EOF
 EOF
 
 tar -tzf "$tarball" >/dev/null
-sha256sum -c "$tarball.sha256"
+(cd "$output_dir" && sha256sum -c "$(basename "$tarball").sha256")
