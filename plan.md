@@ -97,7 +97,7 @@ The operator installs these before running the repository's installer:
   the human-owned installation under `/home/irae/.local`.
 - SQLite CLI for diagnosis and backup checks. `better-sqlite3` supplies the
   application's SQLite binding.
-- `ffmpeg` is not needed until Phase 2 and is already present.
+- `ffmpeg` is not needed until Phase 3 and is already present.
 
 The root installer verifies versions and capabilities; it does not silently
 install OS packages or alter the existing human-owned streamlink installation.
@@ -212,264 +212,58 @@ t.test("converges after early exit and launch/claim interruption");
 t.test("recovers an active window after reboot and marks missed windows");
 ```
 
-## Phase 0 — reliable curl-first recording
+## Phase 0 — done
 
-Each numbered section is a larger implementation block and is committed when
-complete. Do not commit every sub-step separately.
+Built, installed, and live-acceptance-tested on `irae-sheeta`. This replaces the
+former per-block build narrative (§0.1–§0.7 and its acceptance checklist); the
+architecture that later phases build on is captured here and in "Decisions made
+for Phase 0" above and "Operational invariants" below.
 
-Complexity labels estimate implementation and integration risk for the whole
-block: **Easy** is conventional project work with few external interactions;
-**Medium** crosses process, persistence, operating-system, or deployment
-boundaries. No planned block currently warrants a **Hard** label.
+Built:
 
-### 0.1 Bootstrap the Node/TypeScript application
+- Node 24 / TypeScript Express API + finite reconciler tick + Streamlink,
+  over SQLite (WAL, `better-sqlite3`). Root-owned system units: API service,
+  reconciler oneshot, and a 30-second reconciler timer. Containerized
+  `linux/amd64` release build and an auditable `scripts/install-root.sh`.
+- API is the sole SQLite writer; the reconciler reads SQLite and claims status
+  transitions over a private Unix socket (never a direct DB write, never a
+  public status route).
+- Recordings run as detached `rec-<id>` transient `systemd --user` units under
+  the dedicated non-login `rec-live-tronic` account (lingering user manager, no
+  sudo/polkit). Streamlink's binary `--stdout` is appended to
+  `<recordings-root>/<id>.ts` via `StandardOutput=append:`; units survive
+  API/reconciler restart. The reconciler is the authoritative scheduled stopper;
+  `RuntimeMaxSec` is only the dead-reconciler backstop.
+- Server-generated opaque IDs; unit names and output paths derive only from the
+  ID. No request data reaches a shell or becomes a unit/path identifier.
+- Paths: private state under `/var/lib/rec-live-tronic` (+ `cookies/`),
+  recordings under `/srv/rec-live-tronic/recordings`, config under
+  `/etc/rec-live-tronic`.
+- `quality` defaults to `best` and is PATCH-able while `scheduled`.
+- Shared `rec-media` group: `irae` and any assigned media users get read/write
+  on recordings, recorder logs, and cookies (group-write via `UMask=0007`).
+  Recorder stderr is redirected to the shared group-owned log tree.
 
-**Complexity: Easy.**
+Verified live on `irae-sheeta`:
 
-1. Create the package, lockfile, strict TypeScript configuration, build output
-   convention, and configuration loader. Require Node 24 at startup. Default
-   `REC_LIVE_HOST` to `0.0.0.0` while allowing any valid operator-selected
-   listen address without application-level network policy.
-2. Add Express, multipart support, and `better-sqlite3` as runtime dependencies,
-   plus `tap` as the development-only functional test framework. Keep UUID
-   generation and fetch on Node built-ins where practical. Install dependencies
-   on Debian x86-64 rather than copying native `node_modules` from a macOS
-   development machine.
-3. Add the empty app/server composition roots and a `/health` route. Health
-   reports process liveness, SQLite reachability, configured recording-path
-   writability, and dependency status as separate fields; it does not expose
-   secrets or absolute cookie paths.
-4. Establish an `AppError`/error-response contract with stable codes, HTTP
-   statuses, and JSON bodies. Put a no-op authentication middleware at one
-   composition seam without implementing authentication.
-5. Document and verify `npm ci`, `npm run build`, the two functional suites via
-   `npm test`, and local startup.
-6. Add the containerized release build. It must use the same Node 24 major and
-   Debian/glibc family as the target, load `better-sqlite3` and run the two
-   project functional suites inside the container, and package `dist/`,
-   production `node_modules`, migrations, package metadata, systemd files, and
-   the installer. Include a
-   manifest containing git revision, build time, `linux/amd64`, Node version and
-   module ABI, dependency-lock digest, and artifact checksum. Do not package
-   source-only development dependencies or secrets. Treat successful container
-   build, functional suite, native-binding load, manifest inspection, and
-   checksum verification as build smoke checks rather than a separate test
-   suite.
+- Concurrent recordings (two overlapping windows, distinct cookies).
+- Live extend and shorten of `stop_at` on a running recording; systemd stops it
+  at the new durable deadline.
+- Cancel mid-recording: API persists `cancelled` and stops the unit immediately
+  without waiting for a tick.
+- Reconciler convergence after API downtime (failed tick, restart, no duplicate
+  unit or corrupted state).
+- Window expiry → playable `.ts`, `recorded` status, no live unit, persistent
+  across API restart. Elapsed never-started window → `missed`.
+- Cookie upload via curl with safe response and disk permissions.
+- Group-write shared access as `irae` over SSH with no `su`/`sudo`: tail a live
+  recording's log and read a cookie file directly from the shared tree.
 
-### 0.2 Add the durable SQLite model
-
-**Complexity: Easy.**
-
-1. Add a forward-only migration mechanism and the `recordings` and `cookies`
-   tables. Include the Phase 0 subset of spec fields plus internal
-   `last_started_boot_id` and timestamps. Explicitly exclude `final_path` and
-   every mux-only column until the Phase 2 migration. Store times as validated
-   UTC instants and return RFC 3339.
-2. Constrain statuses to `scheduled`, `recording`, `recorded`, `cancelled`,
-   `failed`, and `missed`; Phase 0 does not introduce candidates, mux fields,
-   or final-file state.
-3. Add indexes for due recordings, status-filtered listing, and cookie
-   references. Preserve cookie rows referenced by recordings; deletion returns
-   a conflict instead of corrupting history.
-4. Enable WAL, foreign keys, a bounded busy timeout, and `0600` database/WAL/SHM
-   access under process `UMask=0077`.
-5. Implement repository operations in explicit transactions. Status updates
-   from reconciliation use compare-and-set predicates so API cancellation or a
-   concurrent tick cannot be overwritten.
-
-### 0.3 Implement the Phase 0 HTTP API
-
-**Complexity: Medium.** The HTTP behavior is conventional; live unit control,
-atomic cookie storage, and the private transition socket add integration work.
-
-1. Implement `POST /recordings`, `GET /recordings?status=`,
-   `GET /recordings/:id`, `PATCH /recordings/:id`, and
-   `DELETE /recordings/:id`. Phase 0 PATCH can retitle/reschedule a future
-   recording and extend or shorten a running recording's `stop_at`; it cannot
-   mutate status. Delete is a durable cancellation request and never deletes
-   the row or media file.
-2. Validate HTTPS YouTube URLs against an explicit hostname allowlist, require
-   `start_at < stop_at`, apply a documented quality allowlist/default, and
-   reject unknown cookie IDs. Generate opaque canonical IDs server-side.
-3. Implement `POST /cookies` with multipart `name` plus one bounded-size file,
-   `GET /cookies`, and `DELETE /cookies/:id`. Return metadata only, never cookie
-   contents or disk paths.
-4. Ignore the client upload filename. Write to a newly generated temporary
-   file with exclusive/no-follow semantics, fsync, set `0600`, atomically
-   rename to the generated cookie ID, and only then commit metadata. Roll back
-   both sides on failure.
-5. After committing cancellation for a live recording, immediately stop the
-   derived user unit and report whether stop confirmation succeeded. If this
-   action is interrupted or fails, keep the durable cancellation and let the
-   next reconciliation tick converge. Never roll cancellation back.
-6. After committing a live `stop_at` change, update the unit's systemd
-   `RuntimeMaxSec` backstop. Prove the systemd 257 runtime-property update on the
-   target; if unsupported, stop and relaunch the same append-mode unit with a
-   recalculated cap. A stop time at or before now takes the immediate stop path.
-7. Add private Unix-socket routes used only by the reconciler to claim
-   transitions with expected status/update version. Do not expose these routes
-   on the TCP listener.
-8. Add curl examples covering health, cookie upload/list/delete, recording
-   create/list/get/live stop-time changes/cancel, validation errors, and status
-   filtering.
-
-### 0.4 Implement one reconciliation tick
-
-**Complexity: Medium.** The state rules are explicit, but systemd interaction,
-reboot recovery, and interruption-safe convergence require careful integration.
-
-1. Define `SystemdClient` with `listRecordingUnits`, `startRecording`,
-   `stopRecording`, and `inspectRecordingUnit`. Use direct argv spawning with no
-   shell. Treat systemctl output as untrusted and validate unit names.
-2. Build streamlink argv with `--hls-live-restart`, `--retry-streams 5`,
-   `--retry-max 0`, the resolved `--http-cookies-file` when selected, the
-   validated URL/quality, `--stdout`, and progress disabled. Configure systemd
-   to append stdout to `<recordings-root>/<id>.ts` and send stderr to the
-   journal. Insert `--` at the systemd-run command boundary.
-3. Start `rec-<id>.service` with `--user`, `--collect`, a `RuntimeMaxSec` equal
-   to the remaining window plus a configurable extension safety margin,
-   `KillMode=control-group`, bounded stop timeout, no restart,
-   restrictive umask, filesystem restrictions, no-new-privileges, and only the
-   address families streamlink needs. Make application state inaccessible inside
-   the recorder's mount namespace; grant the selected recordings output tree
-   explicit write access and bind only the selected cookie at a fixed path.
-   Set Streamlink's home to the unit's private temporary filesystem so its
-   transient config cannot touch application state. Clamp all calculated
-   durations and validate these sandbox properties on the target host.
-4. On each tick, take a database snapshot and a live-unit snapshot, then apply
-   idempotent rules:
-   - due `scheduled` with no unit: launch first, then compare-and-set to
-     `recording` with the current boot ID; if the unit already exists, adopt it;
-   - active-window `recording` with a unit: leave it running after ensuring its
-     backstop cannot preempt the current durable `stop_at`;
-   - active-window `recording` without a unit whose stored boot ID differs:
-     relaunch with the remaining time, appending to the existing `.ts` through
-     systemd's output sink;
-   - current-boot `recording` whose unit ended early: mark `recorded` when a
-     non-empty regular `.ts` exists, otherwise `failed`;
-   - elapsed `recording`: always issue `systemctl --user stop` for a live unit,
-     wait for it to become inactive within a bound, then mark `recorded` for a
-     non-empty regular file or `failed` otherwise;
-   - elapsed `scheduled` with a live unit after a launch/claim interruption:
-     stop it, await inactivity, then mark `recorded` for a non-empty regular
-     file or `failed` otherwise;
-   - elapsed `scheduled` without a valid file: mark `missed`;
-   - `cancelled` with a live unit: stop it and keep `cancelled`.
-5. Send every mutation through the private API. A failed compare-and-set is a
-   benign race: refresh on the next timer tick. Fail the tick visibly if the
-   API/socket is unavailable; never make a direct SQLite write fallback.
-6. Make the process finite: reconcile once, report a structured summary, and
-   exit nonzero only for operational failure. The systemd timer owns cadence
-   and overlap prevention.
-
-### 0.5 Add the auditable root installation boundary
-
-**Complexity: Medium.** The script is short, but it crosses Unix accounts,
-filesystem permissions, system and user service managers, and release layout.
-
-1. Write `scripts/install-root.sh` as an idempotent script with explicit
-   configuration variables/flags. It must stop on errors, require UID 0,
-   resolve concrete paths before destructive operations, and print each
-   material action. It does not use curl-to-shell or install packages.
-2. Preflight Node, the release checksum/manifest, matching `linux/amd64` and
-   Node module ABI, the packaged `better-sqlite3` native binding, SQLite
-   diagnostics, and the root-owned
-   `/usr/local/bin/streamlink` path, its `/opt/pipx` target and pinned version,
-   systemd version/features, disk space, and the configured human account.
-   Verify the artifact records a successful container build/test before
-   installation. Do not compile npm dependencies on the target host.
-3. Create the non-login `rec-live-tronic` system account and private primary
-   group. Create `rec-media`; optionally add the named human account to it only
-   when direct media access is requested.
-4. Install a versioned, root-owned release under `/opt/rec-live-tronic` without
-   making source or dependencies writable by the service account. Keep a
-   root-controlled `current` link or equivalent atomic release selector for
-   recoverable upgrades.
-5. Create and verify:
-   - `/etc/rec-live-tronic` as root-owned configuration;
-   - `/var/lib/rec-live-tronic` and `cookies/` as service-owned mode `0700`;
-   - `/run/rec-live-tronic` through systemd `RuntimeDirectory`, mode `0750`;
-   - `/srv/rec-live-tronic/recordings` as
-     `rec-live-tronic:rec-media`, mode `2750`, producing media mode `0640` with
-     `UMask=0027`.
-6. Enable lingering for the numeric service UID, start/order
-   `user@<uid>.service`, and prove that the service account can create, inspect,
-   and stop a harmless `systemd-run --user` transient unit through its own bus.
-7. Install hardened API, reconciler oneshot, and 30-second timer system units.
-   Both application units use the dedicated UID, empty capability bounds,
-   strict filesystem access, private devices/tmp, and kernel/control-group
-   protections. Grant the API explicit write access only to
-   `/var/lib/rec-live-tronic` and its systemd-created runtime directory. Grant
-   transient recorder units explicit write access to the recordings output
-   tree while keeping SQLite control state inaccessible. The
-   API and reconciler receive their dedicated account's user-bus environment
-   so either can control only that account's units. The reconciler has no
-   general write access to application state or media paths.
-8. Migrate SQLite as the service account with umask `0077`. Write the configured
-   listen host/port without changing Tailscale, firewall, DNS, reverse-proxy, or
-   other host networking configuration.
-9. Reload systemd, enable/start the API and timer, and verify health, modes,
-   ownership, timer execution, private socket access, user transient-unit
-   control, and the configured listen address. Make no sudoers or polkit change.
-10. Document an upgrade path that installs a new versioned release, runs
-    forward migrations, atomically changes the release selector, restarts the
-    API/timer, health-checks, and retains the prior release for application
-    rollback. Database backup/restore is explicit because migrations are
-    forward-only.
-
-Do not build an automated test harness for the installer. Review the short
-script, run it on `irae-sheeta`, inspect its results, rerun it once to smoke-check
-idempotency, and debug concrete failures in place. The script's own preflight
-and post-install checks cover user/group creation, paths and modes, service
-startup, networking non-interference, and the harmless user-unit probe.
-
-### 0.6 End-to-end acceptance on `irae-sheeta`
-
-**Complexity: Medium.** This is mostly procedural verification, with real
-systemd, Streamlink, networking, and reboot behavior in scope.
-
-1. Start the local Docker daemon, run `scripts/build-release.sh` for
-   `linux/amd64`, verify its checksum, copy the versioned tarball and checksum,
-   review the root script, install only runtime OS dependencies, and have the
-   operator run the script.
-2. Upload a non-production test cookie through curl; confirm its response and
-   disk permissions do not reveal or overexpose it.
-3. Schedule two overlapping short recordings with curl, using distinct cookies
-   if available. Confirm two `rec-*` user units and two growing `.ts` files.
-4. Extend one live recording beyond its original stop time and verify it keeps
-   running. Then shorten it and verify systemd stops it at the new durable
-   deadline within the documented tolerance.
-5. Cancel the other recording. Confirm the API persists `cancelled` and stops
-   the unit immediately without waiting for a timer tick.
-6. Stop the API briefly, let a reconciliation tick fail, restart the API, and
-   confirm the next tick converges without corrupting state or duplicating a
-   unit.
-7. Let a window expire and verify a playable `.ts`, `recorded` status, no live
-   unit, and persistence after API restart. Verify an elapsed never-started
-   window becomes `missed`.
-8. Exercise health/create/list/get/patch/cancel against the API's `0.0.0.0`
-   listener over SSH.
-9. Record the exact installed versions, service account UID, paths, configured
-   listener, current Tailscale and LAN URLs, backup command, and diagnostic
-   commands in the deployment section of `README.md`.
-
-Phase 0 is complete only when these acceptance checks pass and the system can
-record reliably without an interactive SSH session, the human user's account,
-sudo, or a root-running application process.
-
-### 0.7 Shared intranet operator access
-
-**Complexity: Easy.** Moved into Phase 0 (was a deferred "next step") so
-debugging on `irae-sheeta` doesn't need a human relaying `su`/journal output.
-
-1. Treat `rec-media` as the shared operational group. `--media-user irae` and
-   any additional media users receive read/write access to the shared
-   recordings, logs, and cookie files needed to operate the box.
-2. Redirect each recorder unit's stderr into the shared, group-owned log tree
-   instead of leaving it only in the journal, so `irae` can tail a recording's
-   log directly over SSH with no `su`/`sudo`.
-3. Verify as `irae` over SSH, no `su`: tail a live recording's log file and
-   read a cookie file directly from the shared tree.
+Invariants later phases must not violate (see "Operational invariants" for the
+full list): API stays the sole SQLite writer; recordings are detached transient
+units, not children of the API/reconciler; `rec-media` read/write access is via
+group-write (`UMask=0007`), while SQLite control state stays reachable only
+through the private socket.
 ## Later phases
 
 These are separate larger blocks. Resolve each listed open decision immediately
@@ -481,50 +275,50 @@ Two independent blocks; commit each when complete, not its sub-steps.
 
 #### Part A — VLC-openable streaming route
 
-**Complexity: Medium.** The handler is a conventional Express file route; range
-requests against a still-growing `.ts` and the ID→path derivation supply the
+**Complexity: Medium.** The handler is a conventional Express file route over a
+finished, fixed-size file; range requests and the ID→path derivation supply the
 integration risk.
 
 This resolves `spec.md`'s "File sharing / network URL" open decision in favour
 of the simplest option: a static file route on the existing public Express API.
 No Jellyfin, nginx, or Samba — each would add a second service, config surface,
-and access boundary for no benefit at this scale. Watching a still-`recording`
-(actively growing) file is **in scope**: the owner's use case is watching
-scheduled live DJ sets, and the MPEG-TS that Streamlink writes through systemd
-`StandardOutput=append:` is playable mid-write, so a finished-only route would
-miss the main thing they want. The route lives on the same public `0.0.0.0` TCP
-listener as every other Phase 0 route and inherits the identical no-auth,
-perimeter-is-the-boundary posture (LAN/Tailscale); it adds no auth and opens no
-new boundary. `DELETE /recordings/:id/file` stays out of Part A — it belongs to
-Phase 3 (remux and file lifecycle).
+and access boundary for no benefit at this scale. Scope is **finished
+(`recorded`/`muxed`) files only**. Streaming a still-`recording` (actively
+growing) file is a **non-goal, never to be built**: if a recording is still in
+progress, the end user can just watch the source live on YouTube directly, so
+there is no reason to also serve the in-progress `.ts`; a growing file has no
+fixed `Content-Length` and would need `Transfer-Encoding: chunked` instead of
+range support, a genuinely different code path not worth building for this. The
+route lives on the same public `0.0.0.0` TCP listener as every other Phase 0
+route and inherits the identical no-auth, perimeter-is-the-boundary posture
+(LAN/Tailscale); it adds no auth and opens no new boundary. `DELETE
+/recordings/:id/file` stays out of Part A — it belongs to Phase 3 (remux and
+file lifecycle).
 
 1. Add `GET /recordings/:id/file` to `createApp` in `src/app.ts`, backed by
    `deps.recorder`. Resolve the recording with
    `RecorderService.getRecording(id)`; derive the on-disk path only from the
    stored `ts_path` (later `final_path` once muxed), never from request data,
    and assert the resolved real path stays within `config.recordingsDir`.
-   Respond `404` when the recording or its file is absent.
+   Respond `404` when the recording or its file is absent, and `409` when its
+   status is `scheduled` or `recording` (file not ready to stream — not a
+   missing-file 404, and not a partial-file stream either).
 2. Serve finished (`recorded`/`muxed`) files with full range support: send
    `Accept-Ranges: bytes`, honour `Range`, reply `206` + `Content-Range` for a
    partial request and `200` + `Content-Length` otherwise so VLC can seek. Set
    a video/MP2T (`.ts`) content type. Stream via a `createReadStream` bounded to
    the requested range and destroy it on client disconnect.
-3. Serve `recording` (growing) files as a live view: stat at request time, range
-   against the current size (open-ended `bytes=N-` streams to the current EOF),
-   and do not advertise a fixed total for an unfinished file. Document that
-   seeking past the current live edge is a client concern and that the `.ts`
-   stays playable even if the recorder is killed mid-write.
-4. Treat this route as the stable per-file network URL sketched in `spec.md`'s
+3. Treat this route as the stable per-file network URL sketched in `spec.md`'s
    API surface. Document the VLC-openable form
    `http://<host>:<port>/recordings/<id>/file` in `README.md` beside the curl
    examples.
-5. Extend the functional server suite (test names only):
+4. Extend the functional server suite (test names only):
 
 ```ts
 // test/functional/server.test.ts (additional blocks)
 t.test("streams a finished recording with range requests for VLC seeking");
-t.test("streams a still-recording file from its current end without a fixed length");
 t.test("rejects file paths escaping the recordings root and 404s a missing file");
+t.test("returns 409 for a recording that is still scheduled or in progress");
 ```
 
 #### Part B — split the release into web, reconciler, and deps packages

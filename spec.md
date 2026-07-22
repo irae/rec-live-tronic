@@ -21,8 +21,8 @@ Build in phase order. Phase 0 must be usable via `curl` and reliably record toda
 - **HTTP API (Node + Express)** — the only writer to SQLite in normal operation. curl-first.
 - **Reconciler daemon** — thin loop (run as a systemd timer/service, tick every 30–60s). Holds no in-memory state worth losing. Diffs SQLite ⇄ live `rec-*` systemd units and acts.
 - **streamlink** — the recorder binary. Writes `.ts` (append-safe; killable mid-write and still playable).
-- **ffmpeg -c copy** — remux `.ts` → final container. *(Phase 2)*
-- **Web UI** — schedule/history/candidates/files. *(Phase 3)*
+- **ffmpeg -c copy** — remux `.ts` → final container. *(Phase 3)*
+- **Web UI** — schedule/history/candidates/files. *(Phase 4)*
 
 ## Trusted intranet access (next deployment block)
 
@@ -60,11 +60,11 @@ Reconciler tick responsibilities:
 4. `recording` & unit gone early (crash/stream ended) → mark `recorded` (file exists) or `failed`.
 5. `cancelled` with a live unit → `systemctl stop`, mark `cancelled`.
 6. Reboot recovery (rule 1 covers it) / `missed` when window fully elapsed with no file or launch evidence.
-7. *(Phase 2)* `recorded` & not yet muxed → enqueue remux.
+7. *(Phase 3)* `recorded` & not yet muxed → enqueue remux.
 
 ## Data model (fields, not schema)
 
-- **recordings**: `id`, `url`, `title`, `cookie_id?`, `quality` (default `720p`/`best`), `start_at`, `stop_at`, `status`, `unit_name`, `ts_path`, `final_path?`, `created_at`, `updated_at`.
+- **recordings**: `id`, `url`, `title`, `cookie_id?`, `quality` (default `best`), `start_at`, `stop_at`, `status`, `unit_name`, `ts_path`, `final_path?`, `created_at`, `updated_at`.
   - status: `scheduled → recording → recorded → muxed` plus `cancelled | failed | missed`.
 - **cookies**: `id`, `name`, `path`, `updated_at`. Multiple named cookie files → different accounts for parallel recordings.
 - **candidates**: `id`, `source`, `title`, `url`, `suggested_start`, `suggested_stop`, `imported_at`, `promoted_recording_id?`. A candidate is an un-scheduled suggestion; promoting one creates a `recordings` row.
@@ -77,7 +77,7 @@ Cookies: `POST /cookies` (multipart upload, `name` + file) · `GET /cookies` · 
 
 Candidates: `POST /candidates` (bulk import a broadcast schedule) · `GET /candidates` · `POST /candidates/:id/schedule` (promote → recording, optional overrides) · `DELETE /candidates/:id`.
 
-Files *(sketch — see decisions)*: `GET /recordings/:id/file` (stream/download) · `DELETE /recordings/:id/file` · a stable network URL per file for VLC.
+Files: `GET /recordings/:id/file` — a static Express route that streams a **finished** (`recorded`/`muxed`) file with HTTP range support, giving a stable per-file network URL VLC can open (Phase 1; see plan.md). Serving a still-recording/growing file is a non-goal. `DELETE /recordings/:id/file` lands with the file lifecycle *(Phase 3)*.
 
 Ops: `GET /health` · `GET /recordings/:id/log` (tail streamlink output).
 
@@ -89,19 +89,21 @@ Ops: `GET /health` · `GET /recordings/:id/log` (tail streamlink output).
 
 ## Build phases
 
-- **Phase 0 (today, MVP):** SQLite + Express API + reconciler + streamlink. Schedule/list/cancel recordings, extend/shorten `stop_at` live, and upload cookies via curl. Records `.ts` reliably. No UI, no transcode.
-- **Phase 1:** candidates (import schedule → promote) and log tailing.
-- **Phase 2:** transcode worker `.ts → final container` (as `mux-<id>` systemd units, concurrency-capped) + file delete.
-- **Phase 3:** web UI (schedule form, history, candidate inbox, file list + network URLs).
-- **Phase 4 (deferred):** auth middleware, retention/cleanup policy.
+- **Phase 0 (MVP, done):** SQLite + Express API + reconciler + streamlink. Schedule/list/cancel recordings, extend/shorten `stop_at` live, and upload cookies via curl. Records `.ts` reliably. No UI, no transcode.
+- **Phase 1:** VLC-openable static file route (`GET /recordings/:id/file`, finished files only) + split the release into `web`/`reconciler`/`deps` packages for independent, faster deploys.
+- **Phase 2:** candidates (import schedule → promote) and log tailing.
+- **Phase 3:** transcode/remux worker `.ts → final container` (as `mux-<id>` systemd units, concurrency-capped) + file delete.
+- **Phase 4:** web UI (schedule form, history, candidate inbox, file list + network URLs).
+- **Phase 5 (deferred):** auth middleware, retention/cleanup policy.
 
 ## Open decisions — resolve before the relevant phase (do NOT invent)
 
-- ⚠ **File sharing / network URL (Phase 2–3):** static Express file route vs. a media container (e.g. Jellyfin) vs. plain nginx/Samba. Must yield a VLC-openable URL on the configured network. *Left undecided — sketch only.*
-- ⚠ **Final container (Phase 2):** `mkv` vs `mp4` (remux `-c copy`; if audio/video codecs aren't mp4-safe, mkv is the safe default).
-- ⚠ **Transcode trigger (Phase 2):** reconciler-driven vs. a systemd `.path` unit watching the output dir.
-- ⚠ **Candidate import format (Phase 1):** JSON array vs. CSV vs. ICS. Default assumption: JSON for MVP.
-- ⚠ **Retention (Phase 4):** manual delete only, or age/size-based cleanup.
+- ⚠ **Final container (Phase 3):** `mkv` vs `mp4` (remux `-c copy`; if audio/video codecs aren't mp4-safe, mkv is the safe default).
+- ⚠ **Transcode trigger (Phase 3):** reconciler-driven vs. a systemd `.path` unit watching the output dir.
+- ⚠ **Candidate import format (Phase 2):** JSON array vs. CSV vs. ICS. Default assumption: JSON for MVP.
+- ⚠ **Retention (Phase 5):** manual delete only, or age/size-based cleanup.
+
+*Resolved: file sharing / network URL — a static Express file route (`GET /recordings/:id/file`), finished files only, built in Phase 1 (see plan.md). No Jellyfin/nginx/Samba.*
 
 ## Non-goals (MVP)
 
