@@ -34,9 +34,9 @@ function close(server: Server): Promise<void> {
 
 export async function startServer(config: Config = loadConfig(), nodeVersion = process.versions.node): Promise<RunningServer> {
   assertSupportedNodeVersion(nodeVersion);
-  await mkdir(config.dataDir, { recursive: true, mode: 0o700 });
-  await mkdir(config.cookiesDir, { recursive: true, mode: 0o700 });
-  await mkdir(config.recordingsDir, { recursive: true, mode: 0o750 });
+  await mkdir(config.dataDir, { recursive: true, mode: 0o770 });
+  await mkdir(config.cookiesDir, { recursive: true, mode: 0o770 });
+  await mkdir(config.recordingsDir, { recursive: true, mode: 0o770 });
   await mkdir(dirname(config.privateSocketPath), { recursive: true, mode: 0o750 });
 
   const database = openDatabase(config.databasePath);
