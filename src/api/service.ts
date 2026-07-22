@@ -65,7 +65,7 @@ export class RecorderService {
       cookieIdValue = text(input.cookie_id, "cookie_id", 100);
       if (!this.cookies.getStoredById(cookieIdValue)) throw new AppError("UNKNOWN_COOKIE", 400, "cookie_id does not exist");
     }
-    const quality = input.quality === undefined ? "720p" : text(input.quality, "quality", 20);
+    const quality = input.quality === undefined ? "best" : text(input.quality, "quality", 20);
     if (!qualityValues.includes(quality as (typeof qualityValues)[number])) throw new AppError("VALIDATION_ERROR", 400, "quality is invalid");
     const id = recordingId();
     return mapRecording(this.recordings.create({ id, url: validateUrl(input.url), title: text(input.title, "title"), cookieId: cookieIdValue, quality, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
