@@ -1,0 +1,9 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+dist
+release
+agent-communications
+npm-debug.log*

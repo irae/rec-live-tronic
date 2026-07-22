@@ -1,0 +1,31 @@
+{
+  "name": "rec-live-tronic",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0 <25",
+    "npm": ">=11"
+  },
+  "scripts": {
+    "clean": "rm -rf dist",
+    "build": "npm run clean && tsc -p tsconfig.json",
+    "dev": "npm run build && node --watch dist/server.js",
+    "start": "node dist/server.js",
+    "test": "npm run build && tap --disable-coverage test/functional/*.test.ts",
+    "reconcile:once": "node dist/reconciler/main.js",
+    "db:migrate": "node dist/db/migrate.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "13.0.1",
+    "express": "5.2.1",
+    "multer": "2.2.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "7.6.13",
+    "@types/express": "5.0.6",
+    "@types/node": "24.13.3",
+    "tap": "21.7.4",
+    "typescript": "5.9.3"
+  }
+}

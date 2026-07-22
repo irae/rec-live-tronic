@@ -1,0 +1,27 @@
+FROM node:24-trixie@sha256:eb2c73a27cf714b4b6b030f88ab72e62192c38b7d313ea3456695b8ae03c5f3c AS build
+
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY package.json package-lock.json ./
+RUN npm ci
+COPY . ./
+RUN npm test
+RUN npm ci --omit=dev && node -e "const Database = require('better-sqlite3'); const db = new Database(':memory:'); db.prepare('SELECT 1').get(); db.close();"
+
+FROM node:24-trixie@sha256:eb2c73a27cf714b4b6b030f88ab72e62192c38b7d313ea3456695b8ae03c5f3c AS release
+
+ARG GIT_REVISION=unknown
+ARG BASE_IMAGE_DIGEST=sha256:eb2c73a27cf714b4b6b030f88ab72e62192c38b7d313ea3456695b8ae03c5f3c
+WORKDIR /release-source
+COPY --from=build /app/dist ./dist
+COPY --from=build /app/node_modules ./node_modules
+COPY --from=build /app/package.json /app/package-lock.json ./
+COPY --from=build /app/migrations ./migrations
+COPY --from=build /app/systemd ./systemd
+COPY --from=build /app/scripts/install-root.sh ./scripts/install-root.sh
+COPY --from=build /app/scripts/package-release.sh /usr/local/bin/package-release
+RUN chmod 0755 /usr/local/bin/package-release
+ENV GIT_REVISION=${GIT_REVISION}
+ENV BASE_IMAGE_DIGEST=${BASE_IMAGE_DIGEST}
+ENTRYPOINT ["/usr/local/bin/package-release"]
