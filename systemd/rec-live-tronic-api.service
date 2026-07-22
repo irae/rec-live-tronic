@@ -12,7 +12,7 @@ WorkingDirectory=/opt/rec-live-tronic/current
 EnvironmentFile=/etc/rec-live-tronic/rec-live-tronic.env
 Environment=XDG_RUNTIME_DIR=/run/user/@SERVICE_UID@
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/@SERVICE_UID@/bus
-ExecStart=/usr/bin/node /opt/rec-live-tronic/current/dist/server.js
+ExecStart=/usr/local/bin/node /opt/rec-live-tronic/current/dist/server.js
 Restart=on-failure
 RestartSec=5s
 RuntimeDirectory=rec-live-tronic

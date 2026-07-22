@@ -1,14 +1,52 @@
 # rec-live-tronic
 
 `rec-live-tronic` is a curl-first YouTube live recorder. Phase 0 records
-append-safe transport streams through Streamlink and systemd; the current
-bootstrap provides the Node/TypeScript runtime foundation and health endpoint.
+append-safe transport streams through Streamlink and systemd.
 
 ## Requirements
 
-- Node.js 24.x and npm (the service rejects other Node majors at startup)
-- Debian 13 x86-64 for release artifacts
-- Docker with Buildx to create a target-host release artifact
+- Node.js 24.x and npm (the service rejects other Node majors at startup).
+- Docker with Buildx on the build host.
+- Debian 13 x86-64, SQLite CLI, and root-managed Streamlink 8.4.0 on the
+  target host.
+
+## Target-host prerequisites
+
+After extracting the verified release on Debian 13 x86-64, run these commands
+as a sudo-capable operator. They install the exact Node version recorded by the
+release, not merely any Node 24 release. The installer does not install these
+dependencies for you.
+
+```sh
+cd /path/to/rec-live-tronic-0.1.0
+
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends ca-certificates curl pipx sqlite3 xz-utils
+
+NODE_VERSION=$(sed -n 's/.*"node_version": "\([^"]*\)".*/\1/p' manifest.json)
+test -n "$NODE_VERSION"
+cd /tmp
+curl -fSLO "https://nodejs.org/dist/$NODE_VERSION/node-$NODE_VERSION-linux-x64.tar.xz"
+curl -fSLO "https://nodejs.org/dist/$NODE_VERSION/SHASUMS256.txt"
+grep " node-$NODE_VERSION-linux-x64.tar.xz$" SHASUMS256.txt | sha256sum -c -
+sudo tar -C /opt -xJf "node-$NODE_VERSION-linux-x64.tar.xz"
+sudo ln -sfn "/opt/node-$NODE_VERSION-linux-x64" /usr/local/node
+sudo ln -sfn /usr/local/node/bin/node /usr/local/bin/node
+sudo ln -sfn /usr/local/node/bin/npm /usr/local/bin/npm
+sudo ln -sfn /usr/local/node/bin/npx /usr/local/bin/npx
+
+sudo env PIPX_HOME=/opt/pipx PIPX_BIN_DIR=/usr/local/bin \
+  pipx install --python /usr/bin/python3 'streamlink==8.4.0'
+
+/usr/local/bin/node --version
+/usr/local/bin/npm --version
+/usr/local/bin/streamlink --version
+sqlite3 --version
+```
+
+The commands intentionally leave the human account's Streamlink installation
+alone. The service uses only `/usr/local/bin/streamlink`, whose resolved target
+must be under root-owned `/opt/pipx`.
 
 Install dependencies on the platform where they will run. In particular, do
 not copy `node_modules` built on macOS into a Debian release: `better-sqlite3`
@@ -86,8 +124,9 @@ the reconciler will converge if that immediate action cannot be confirmed.
 - private API socket at `/run/rec-live-tronic/api.sock`
 - root-managed Streamlink at `/usr/local/bin/streamlink`
 
-The database migration and reconciler commands are intentionally reserved for
-the next Phase 0 blocks; they currently report that the feature is unavailable.
+`npm run db:migrate` applies forward-only database migrations. `npm run
+reconcile:once` runs one reconciliation tick; systemd owns its production
+cadence.
 
 ## Deployment release build
 
