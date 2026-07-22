@@ -10,7 +10,7 @@ import { createPrivateTransitionClient, reconcileOnce } from "./reconcile-once.j
 export async function runOnce(): Promise<void> {
   assertSupportedNodeVersion();
   const config = loadConfig();
-  const database = openDatabase(config.databasePath);
+  const database = openDatabase(config.databasePath, { readonly: true });
   try {
     const bootId = (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim();
     const summary = await reconcileOnce(new Date(), bootId, {
