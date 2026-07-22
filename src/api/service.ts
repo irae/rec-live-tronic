@@ -86,6 +86,12 @@ export class RecorderService {
     return mapRecording(recording);
   }
 
+  getRecordingFile(id: string): { status: RecordingStatus; tsPath: string } {
+    const recording = this.recordings.getById(id);
+    if (!recording) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    return { status: recording.status, tsPath: recording.tsPath };
+  }
+
   async patchRecording(id: string, input: RecordingPatch): Promise<{ recording: ReturnType<typeof mapRecording>; runtime_updated?: boolean; relaunched?: boolean; stop?: { attempted: true; confirmed: boolean } }> {
     const existing = this.recordings.getById(id);
     if (!existing) throw new AppError("NOT_FOUND", 404, "Recording not found");

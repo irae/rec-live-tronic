@@ -104,6 +104,7 @@ curl http://127.0.0.1:8787/recordings/rec-REPLACE_ME
 curl -X PATCH http://127.0.0.1:8787/recordings/rec-REPLACE_ME \
   -H 'content-type: application/json' -d '{"stop_at":"2026-07-21T22:30:00Z"}'
 curl -X DELETE http://127.0.0.1:8787/recordings/rec-REPLACE_ME
+curl http://127.0.0.1:8787/recordings/rec-REPLACE_ME/file  # VLC-openable URL for a finished recording
 
 # Validation errors are structured and safe to show in scripts.
 curl -X POST http://127.0.0.1:8787/recordings -H 'content-type: application/json' \
@@ -130,7 +131,7 @@ cadence.
 
 ## Deployment release build
 
-Docker is only for producing the Debian x86-64 deployment artifact. Day-to-day
+Docker is only for producing the Debian x86-64 deployment artifacts. Day-to-day
 development and all ordinary build/test work use the bare-metal Node/npm steps
 above.
 
@@ -141,45 +142,45 @@ scripts/build-release.sh
 ```
 
 It uses a digest-pinned `node:24-trixie` builder, cleanly installs dependencies,
-runs the functional suites, loads the native SQLite binding, and writes a
-tarball, detached SHA-256 file, and sidecar manifest to `release/`. The
-artifact contains only compiled code, production dependencies, migrations,
-systemd files, package metadata, and the root installer—never source tests or
-`.env` files. Verify a generated artifact before transfer:
-
-```sh
-cd release
-sha256sum -c rec-live-tronic-*-linux-amd64.tar.gz.sha256
-```
+runs the functional suites, loads the native SQLite binding, and writes three
+tarballs to `release/`: `rec-live-tronic-deps.tar.gz`, `rec-live-tronic-web.tar.gz`,
+and `rec-live-tronic-reconciler.tar.gz`. Each contains only the files needed for
+that deployment unit—dependencies, web application, or reconciler—never source tests
+or `.env` files.
 
 ## Target-host installation
 
 Docker is only used to build the release; target-host development and runtime
 are bare metal. Before installation, the operator must provision (or verify)
-Node 24 matching the release manifest, SQLite CLI, and root-owned Streamlink
-8.4.0 at `/usr/local/bin/streamlink`. Its resolved target must live under
-root-owned `/opt/pipx`. The installer deliberately does not install packages,
-compile native modules, configure a firewall/Tailscale, or change sudoers or
-polkit.
+Node 24, SQLite CLI, and root-owned Streamlink 8.4.0 at `/usr/local/bin/streamlink`.
+Its resolved target must live under root-owned `/opt/pipx`. The installer
+deliberately does not install packages, compile native modules, configure a
+firewall/Tailscale, or change sudoers or polkit.
 
-Verify the transferred artifact, extract it into a root-owned directory, and
-run its installer as root. Add the normal SSH/SFTP user to `rec-media` only if
-that account needs direct read/write media access.
+Transfer the three release artifacts to the target and run the installer as
+root. Add the normal SSH/SFTP user to `rec-media` only if that account needs
+direct read/write media access.
 
 ```sh
-sha256sum -c rec-live-tronic-0.1.0-linux-amd64.tar.gz.sha256
-sudo tar -xzf rec-live-tronic-0.1.0-linux-amd64.tar.gz
-cd rec-live-tronic-0.1.0
-sudo scripts/install-root.sh --media-user irae
+scp rec-live-tronic-*.tar.gz remote:/tmp/
+ssh -t remote sudo /tmp/rec-live-tronic-web.tar.gz web/scripts/install-root.sh --force --media-user irae
+```
+
+Or use the automated `install-sheeta.sh` script (update `REMOTE_HOST` and
+`REMOTE_USER` as needed):
+
+```sh
+scripts/install-sheeta.sh
 ```
 
 Use the real account name as one argument (for example `--media-user irae`);
 omit the option to keep recordings available only to the service account. The
-installer preflights the manifest, native `better-sqlite3` load, exact Node ABI,
-Streamlink, SQLite, systemd capabilities, free space, and release ownership.
+installer preflights the native `better-sqlite3` load, Node ABI, Streamlink,
+SQLite, systemd capabilities, free space, and release ownership.
 It then creates the non-login `rec-live-tronic` account, enables its lingering
-user manager, proves its user-bus transient-unit control, installs root-owned
-versioned releases below `/opt/rec-live-tronic`, and creates these paths:
+user manager, proves its user-bus transient-unit control, installs three
+directories below `/opt/rec-live-tronic` (`deps`, `web`, `reconciler`), and
+creates these paths:
 
 - `/etc/rec-live-tronic/rec-live-tronic.env` — root-owned runtime configuration.
 - `/var/lib/rec-live-tronic` and `cookies/` — `rec-live-tronic:rec-media`, mode `0770`.

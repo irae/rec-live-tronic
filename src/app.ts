@@ -92,6 +92,15 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService): void 
   app.delete("/recordings/:id", async (request, response, next) => {
     try { response.json(await recorder.cancelRecording(request.params.id)); } catch (error) { next(error); }
   });
+  app.get("/recordings/:id/file", (request, response, next) => {
+    try {
+      const { status, tsPath } = recorder.getRecordingFile(request.params.id);
+      if (status !== "recorded") throw new AppError("STATUS_CONFLICT", 409, "Recording file is not ready to stream");
+      response.sendFile(tsPath, { headers: { "Content-Type": "video/mp2t" } }, (error) => {
+        if (error) next(error);
+      });
+    } catch (error) { next(error); }
+  });
 
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
   app.post("/cookies", upload.single("file"), async (request, response, next) => {

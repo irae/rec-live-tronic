@@ -92,3 +92,75 @@ t.test("keeps reconciler transitions off TCP while accepting them on the private
   t.equal(privateResponse.status, 200);
   t.match(privateResponse.body, { recording: { id: createdBody.recording.id, status: "recording", version: 1 } });
 });
+
+t.test("serves a finished recording's file", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=phase03",
+      title: "file serve test",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  const testContent = "test video content";
+  await writeFile(join(root, "recordings", `${id}.ts`), testContent);
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  const fileResponse = await fetch(`${base}/recordings/${id}/file`);
+  t.equal(fileResponse.status, 200);
+  t.equal(fileResponse.headers.get("Content-Type"), "video/mp2t");
+  const body = await fileResponse.text();
+  t.equal(body, testContent);
+});
+
+t.test("404s a recording that does not exist", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const fileResponse = await fetch(`${base}/recordings/rec-nonexistent/file`);
+  t.equal(fileResponse.status, 404);
+  const body = await fileResponse.json() as { error: { code: string } };
+  t.equal(body.error.code, "NOT_FOUND");
+});
+
+t.test("returns 409 for a recording that is still scheduled", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=phase03",
+      title: "scheduled test",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string } };
+  const fileResponse = await fetch(`${base}/recordings/${createdBody.recording.id}/file`);
+  t.equal(fileResponse.status, 409);
+  const body = await fileResponse.json() as { error: { code: string } };
+  t.equal(body.error.code, "STATUS_CONFLICT");
+});
