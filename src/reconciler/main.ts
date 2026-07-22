@@ -1,4 +1,6 @@
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { assertSupportedNodeVersion, loadConfig } from "../config.js";
 import { openDatabase } from "../db/connection.js";
 import { RecordingRepository } from "../recordings/repository.js";
@@ -21,5 +23,5 @@ export async function runOnce(): Promise<void> {
   } finally { database.close(); }
 }
 
-function isMainModule(): boolean { return process.argv[1] !== undefined && import.meta.url === new URL(`file://${process.argv[1]}`).href; }
+function isMainModule(): boolean { return process.argv[1] !== undefined && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url); }
 if (isMainModule()) runOnce().catch((error: unknown) => { console.error(error); process.exitCode = 1; });

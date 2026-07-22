@@ -1,6 +1,7 @@
-import { constants } from "node:fs";
+import { constants, realpathSync } from "node:fs";
 import { access, chmod, mkdir, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
+import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { createApp, type HealthReport } from "./app.js";
 import { RecorderService } from "./api/service.js";
@@ -89,7 +90,7 @@ export async function startServer(config: Config = loadConfig(), nodeVersion = p
 }
 
 function isMainModule(): boolean {
-  return process.argv[1] !== undefined && import.meta.url === new URL(`file://${process.argv[1]}`).href;
+  return process.argv[1] !== undefined && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url);
 }
 
 if (isMainModule()) {
