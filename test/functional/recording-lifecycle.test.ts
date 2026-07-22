@@ -66,6 +66,7 @@ t.test("records a scheduled window and stops it at the durable deadline", async 
   const scheduled = recordings.getById(created.id);
   if (!scheduled) throw new Error("missing scheduled recording");
   const properties = buildTransientProperties(scheduled, config, 60);
+  t.ok(properties.includes("Environment=HOME=/tmp"));
   t.ok(properties.includes(`ReadWritePaths=${config.recordingsDir}`));
   t.ok(properties.includes(`InaccessiblePaths=${config.dataDir}`));
   t.notMatch(properties.join("\n"), new RegExp(`InaccessiblePaths=.*${config.recordingsDir}`));

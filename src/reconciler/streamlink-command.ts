@@ -35,6 +35,7 @@ export function buildTransientProperties(recording: Recording, config: Config, r
     "ProtectKernelModules=yes",
     "ProtectControlGroups=yes",
     "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
+    "Environment=HOME=/tmp",
     `ReadWritePaths=${config.recordingsDir}`,
     `InaccessiblePaths=${config.dataDir}`,
   ];

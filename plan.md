@@ -333,8 +333,9 @@ reboot recovery, and interruption-safe convergence require careful integration.
    address families streamlink needs. Make application state inaccessible inside
    the recorder's mount namespace; grant the selected recordings output tree
    explicit write access and bind only the selected cookie at a fixed path.
-   Clamp all calculated durations and validate these sandbox properties on the
-   target host.
+   Set Streamlink's home to the unit's private temporary filesystem so its
+   transient config cannot touch application state. Clamp all calculated
+   durations and validate these sandbox properties on the target host.
 4. On each tick, take a database snapshot and a live-unit snapshot, then apply
    idempotent rules:
    - due `scheduled` with no unit: launch first, then compare-and-set to
