@@ -164,7 +164,7 @@ polkit.
 
 Verify the transferred artifact, extract it into a root-owned directory, and
 run its installer as root. Add the normal SSH/SFTP user to `rec-media` only if
-that account needs direct, read-only media access.
+that account needs direct read/write media access.
 
 ```sh
 sha256sum -c rec-live-tronic-0.1.0-linux-amd64.tar.gz.sha256
@@ -182,8 +182,8 @@ user manager, proves its user-bus transient-unit control, installs root-owned
 versioned releases below `/opt/rec-live-tronic`, and creates these paths:
 
 - `/etc/rec-live-tronic/rec-live-tronic.env` — root-owned runtime configuration.
-- `/var/lib/rec-live-tronic` and `cookies/` — private `0700` service state.
-- `/srv/rec-live-tronic/recordings` — `rec-live-tronic:rec-media`, mode `2750`.
+- `/var/lib/rec-live-tronic` and `cookies/` — `rec-live-tronic:rec-media`, mode `0770`.
+- `/srv/rec-live-tronic/recordings` — `rec-live-tronic:rec-media`, mode `2770`.
 - `/run/rec-live-tronic` — systemd-created API runtime directory.
 
 After the first installation, edit `/etc/rec-live-tronic/rec-live-tronic.env`
@@ -200,6 +200,20 @@ sudo -u rec-live-tronic \
   DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$(id -u rec-live-tronic)/bus \
   systemctl --user list-units --all
 ```
+
+## Current deployment (`irae-sheeta`)
+
+- Release `0.1.0`, service account UID `998`, Node `v24.18.0`, Streamlink `8.4.0`.
+- Listener: `0.0.0.0:8787` (default, unchanged). Reachable at
+  `http://irae-sheeta.tailc9708.ts.net:8787` over Tailscale, or
+  `http://<host-LAN-IP>:8787` from the home LAN.
+- `irae` is a `rec-media` member: recordings, logs, and cookies under
+  `/srv/rec-live-tronic/recordings` and `/var/lib/rec-live-tronic` are directly
+  readable/writable over SSH, no `su` needed.
+- Backup: `su -c 'sqlite3 /var/lib/rec-live-tronic/rec-live-tronic.sqlite ".backup /tmp/rec-live-tronic-backup.sqlite"'`
+- Diagnostics: `curl http://127.0.0.1:8787/health`,
+  `systemctl status rec-live-tronic-api.service rec-live-tronic-reconciler.timer`,
+  `tail -f /srv/rec-live-tronic/recordings/<id>.log`.
 
 ## Upgrade and rollback
 
