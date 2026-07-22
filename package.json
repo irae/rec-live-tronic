@@ -27,5 +27,8 @@
     "@types/node": "24.13.3",
     "tap": "21.7.4",
     "typescript": "5.9.3"
+  },
+  "allowScripts": {
+    "better-sqlite3@13.0.1": true
   }
 }
