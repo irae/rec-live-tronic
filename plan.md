@@ -482,6 +482,26 @@ Phase 0 remains read-only for media users until it is implemented.
    logs, read/write recording artifacts, inspect cookie files, and confirm
    that the API/reconciler continue to operate with the shared permissions.
 
+### Next step — split dependencies from code for fast deployment
+
+**Complexity: Medium.** This is a release/deployment optimization; it must not
+change the recording contract or the running service's ownership boundaries.
+
+1. Emit an immutable dependency bundle keyed by the lockfile, Node version,
+   module ABI, and `linux/amd64` platform. Reuse it while that fingerprint is
+   unchanged instead of repacking `node_modules` for every code change.
+2. Emit a small code bundle containing `dist`, migrations, systemd units,
+   installer/diagnostic scripts, manifest, and configuration template. Keep
+   dependency metadata in the manifest so the target can reject an incompatible
+   bundle before switching releases.
+3. Add a fast deployment script that transfers code with `rsync --checksum` to
+   a staging release, links the matching immutable dependency bundle, runs the
+   same health/socket/reconciler verification, and atomically updates `current`.
+   Never rsync directly into the active release.
+4. Preserve versioned releases and rollback. Keep the existing tarball-based
+   root installer as the first-install/bootstrap path; use the fast deploy only
+   for subsequent code-only iterations.
+
 ## Later phases
 
 These are separate larger blocks. Resolve each listed open decision immediately
