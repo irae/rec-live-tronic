@@ -470,33 +470,130 @@ debugging on `irae-sheeta` doesn't need a human relaying `su`/journal output.
    log directly over SSH with no `su`/`sudo`.
 3. Verify as `irae` over SSH, no `su`: tail a live recording's log file and
    read a cookie file directly from the shared tree.
-
-### Next step — split dependencies from code for fast deployment
-
-**Complexity: Medium.** This is a release/deployment optimization; it must not
-change the recording contract or the running service's ownership boundaries.
-
-1. Emit an immutable dependency bundle keyed by the lockfile, Node version,
-   module ABI, and `linux/amd64` platform. Reuse it while that fingerprint is
-   unchanged instead of repacking `node_modules` for every code change.
-2. Emit a small code bundle containing `dist`, migrations, systemd units,
-   installer/diagnostic scripts, manifest, and configuration template. Keep
-   dependency metadata in the manifest so the target can reject an incompatible
-   bundle before switching releases.
-3. Add a fast deployment script that transfers code with `rsync --checksum` to
-   a staging release, links the matching immutable dependency bundle, runs the
-   same health/socket/reconciler verification, and atomically updates `current`.
-   Never rsync directly into the active release.
-4. Preserve versioned releases and rollback. Keep the existing tarball-based
-   root installer as the first-install/bootstrap path; use the fast deploy only
-   for subsequent code-only iterations.
-
 ## Later phases
 
 These are separate larger blocks. Resolve each listed open decision immediately
 before its phase and commit completed blocks, not their sub-steps.
 
-### Phase 1 — candidates and log access
+### Phase 1 — network playback and split release packages
+
+Two independent blocks; commit each when complete, not its sub-steps.
+
+#### Part A — VLC-openable streaming route
+
+**Complexity: Medium.** The handler is a conventional Express file route; range
+requests against a still-growing `.ts` and the ID→path derivation supply the
+integration risk.
+
+This resolves `spec.md`'s "File sharing / network URL" open decision in favour
+of the simplest option: a static file route on the existing public Express API.
+No Jellyfin, nginx, or Samba — each would add a second service, config surface,
+and access boundary for no benefit at this scale. Watching a still-`recording`
+(actively growing) file is **in scope**: the owner's use case is watching
+scheduled live DJ sets, and the MPEG-TS that Streamlink writes through systemd
+`StandardOutput=append:` is playable mid-write, so a finished-only route would
+miss the main thing they want. The route lives on the same public `0.0.0.0` TCP
+listener as every other Phase 0 route and inherits the identical no-auth,
+perimeter-is-the-boundary posture (LAN/Tailscale); it adds no auth and opens no
+new boundary. `DELETE /recordings/:id/file` stays out of Part A — it belongs to
+Phase 3 (remux and file lifecycle).
+
+1. Add `GET /recordings/:id/file` to `createApp` in `src/app.ts`, backed by
+   `deps.recorder`. Resolve the recording with
+   `RecorderService.getRecording(id)`; derive the on-disk path only from the
+   stored `ts_path` (later `final_path` once muxed), never from request data,
+   and assert the resolved real path stays within `config.recordingsDir`.
+   Respond `404` when the recording or its file is absent.
+2. Serve finished (`recorded`/`muxed`) files with full range support: send
+   `Accept-Ranges: bytes`, honour `Range`, reply `206` + `Content-Range` for a
+   partial request and `200` + `Content-Length` otherwise so VLC can seek. Set
+   a video/MP2T (`.ts`) content type. Stream via a `createReadStream` bounded to
+   the requested range and destroy it on client disconnect.
+3. Serve `recording` (growing) files as a live view: stat at request time, range
+   against the current size (open-ended `bytes=N-` streams to the current EOF),
+   and do not advertise a fixed total for an unfinished file. Document that
+   seeking past the current live edge is a client concern and that the `.ts`
+   stays playable even if the recorder is killed mid-write.
+4. Treat this route as the stable per-file network URL sketched in `spec.md`'s
+   API surface. Document the VLC-openable form
+   `http://<host>:<port>/recordings/<id>/file` in `README.md` beside the curl
+   examples.
+5. Extend the functional server suite (test names only):
+
+```ts
+// test/functional/server.test.ts (additional blocks)
+t.test("streams a finished recording with range requests for VLC seeking");
+t.test("streams a still-recording file from its current end without a fixed length");
+t.test("rejects file paths escaping the recordings root and 404s a missing file");
+```
+
+#### Part B — split the release into web, reconciler, and deps packages
+
+**Complexity: Medium.** A release/deployment change only; it must not alter the
+recording contract, the API's sole-writer invariant, or ownership boundaries.
+
+Recordings already run as detached `rec-<id>` transient user units, not as
+children of the API or reconciler process, so restarting either service today
+already does not kill in-progress recordings. This split therefore buys
+independent update/restart cadence and smaller, faster per-service deploys — not
+recording safety, which already exists. On the owner's slow connection the real
+win is the `deps` package: `node_modules` is the only large transfer and is
+skipped whenever its fingerprint is unchanged. This absorbs and replaces the
+former "split dependencies from code for fast deployment" next-step block, which
+is removed to avoid duplication.
+
+Package boundaries:
+- **`deps`** — production `node_modules` only, immutable, keyed by lockfile
+  digest + Node major + module ABI + `linux/amd64`. Reused across deploys while
+  that fingerprint is unchanged.
+- **`web`** — `dist/`, `migrations/`, `systemd/rec-live-tronic-api.service`, the
+  `.env.example` config template, and a manifest recording the required `deps`
+  fingerprint. Runs `node dist/server.js`.
+- **`reconciler`** — `dist/`, `systemd/rec-live-tronic-reconciler.service` and
+  `.timer`, and a manifest recording the required `deps` fingerprint. Runs
+  `node dist/reconciler/main.js`.
+
+`dist/` is small and shared by both entry points (the reconciler imports
+`../api/service.js`, `../config.js`, and other compiled modules), so `web` and
+`reconciler` each carry a full `dist/` copy rather than introducing a third
+shared-code package; only the large `node_modules` is deduplicated via `deps`.
+
+1. Change `scripts/package-release.sh` to emit three artifacts instead of one
+   tarball — `rec-live-tronic-deps-<fingerprint>.tar.gz`,
+   `rec-live-tronic-web-<version>.tar.gz`, and
+   `rec-live-tronic-reconciler-<version>.tar.gz`, each with its own
+   manifest/checksum. The two code manifests record the `deps` fingerprint they
+   require. `scripts/build-release.sh` still runs the container build/tests once
+   and produces all three.
+2. Lay out `/opt/rec-live-tronic` per package: `deps/<fingerprint>/`,
+   `web/<version>/`, and `reconciler/<version>/`, each with an atomic `current`
+   selector. Each code release's `node_modules` is a symlink to the matching
+   `deps/<fingerprint>`; deploy refuses to link an incompatible fingerprint.
+3. Point `systemd/rec-live-tronic-api.service` at `web/current` and the
+   reconciler service/timer at `reconciler/current` (ExecStart/WorkingDirectory),
+   each resolving `node_modules` through its release symlink. Both keep reading
+   the same `/etc/rec-live-tronic` config and the same `/var/lib/rec-live-tronic`
+   SQLite and `/srv/rec-live-tronic/recordings`; the API stays the sole SQLite
+   writer and the reconciler still transitions through the private socket.
+4. Update `scripts/install-root.sh` (still the first-install/bootstrap path) to
+   install all three packages, link `deps`, and start both services. Add a fast
+   code-only deploy script that transfers only the changed `web` and/or
+   `reconciler` package with `rsync --checksum` into a staging release, links the
+   matching existing `deps` fingerprint, runs the health/socket/reconciler
+   verification, and atomically flips only that service's `current` before
+   restarting only that service. Transfer `deps` only when its fingerprint
+   changes; never rsync into an active release.
+5. Verify on `irae-sheeta`: redeploy `web` alone and confirm the reconciler
+   service and any live `rec-*` units are untouched; redeploy `reconciler` alone
+   and confirm the API stays up; confirm a code-only deploy transfers no
+   `node_modules` when the lockfile is unchanged.
+
+> Open question: this split assumes `web` and `reconciler` stay co-located on one
+> host sharing the SQLite file, private socket, and recordings tree. Splitting
+> them across hosts would require rethinking DB and private-socket access and is
+> out of scope.
+
+### Phase 2 — candidates and log access
 
 **Complexity: Easy.**
 
@@ -509,7 +606,7 @@ before its phase and commit completed blocks, not their sub-steps.
 4. Acceptance-test candidate promotion, concurrent promotion protection, and
    log tailing through curl.
 
-### Phase 2 — remux and file lifecycle
+### Phase 3 — remux and file lifecycle
 
 **Complexity: Medium.** It adds another reconciled systemd job type and durable
 file-state transitions.
@@ -522,23 +619,24 @@ file-state transitions.
    same crash/reboot principles as recordings.
 3. Publish final paths only after atomic successful completion. Preserve `.ts`
    on any remux failure.
-4. Add authenticated-by-perimeter file download/stream and explicit file-delete
-   behavior only after choosing the Phase 2–3 serving design.
+4. Add explicit file-delete behavior for finished recordings, and serve muxed
+   `final_path` files through the Phase 1 `GET /recordings/:id/file` route
+   (already built for `.ts`). No separate serving-design decision remains.
 
-### Phase 3 — web client and stable media URLs
+### Phase 4 — web client and stable media URLs
 
 **Complexity: Medium.** The UI is conventional; the chosen media-serving
 boundary and VLC-compatible URLs supply the integration risk.
 
-1. Decide Express static delivery, a media service, or nginx/Samba based on VLC
-   range-request support, configured-network exposure, operational burden, and
-   deletion ownership. Record the choice before implementation.
+1. Reuse the Phase 1 static Express file route (`GET /recordings/:id/file`, with
+   range support decided and built there); no media service or nginx/Samba is
+   introduced.
 2. Build the UI solely as an API client: schedule form, current/history lists,
    candidate inbox, file list, and live stop-time editing.
 3. Verify stable VLC-openable URLs, range requests, concurrent recordings, and
    that no browser-only workflow is required for any operation.
 
-### Phase 4 — deferred controls
+### Phase 5 — deferred controls
 
 **Complexity: Medium.** Authentication and deletion policy are ordinary
 features but need careful access and data-loss boundaries.
