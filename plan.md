@@ -461,26 +461,19 @@ Phase 0 is complete only when these acceptance checks pass and the system can
 record reliably without an interactive SSH session, the human user's account,
 sudo, or a root-running application process.
 
-### Next step — shared intranet operator access
+### 0.7 Shared intranet operator access
 
-**Complexity: Easy.** This is an intentional deployment policy for the trusted
-intranet host, not a public-service security boundary. This block is pending;
-Phase 0 remains read-only for media users until it is implemented.
+**Complexity: Easy.** Moved into Phase 0 (was a deferred "next step") so
+debugging on `irae-sheeta` doesn't need a human relaying `su`/journal output.
 
 1. Treat `rec-media` as the shared operational group. `--media-user irae` and
    any additional media users receive read/write access to the shared
-   recordings, diagnostics, logs, and cookie files needed to operate the box.
-2. Put recordings, service logs, and other operational artifacts in explicit
-   group-owned trees with inherited group permissions. Do not require `irae`
-   to read the system journal directly or grant broad journal access when a
-   shared log tree is sufficient.
-3. Keep SQLite control/state files and transient systemd internals out of the
-   shared tree unless an explicit diagnostic export is requested. Cookies are
-   allowed in the shared operational tree because this deployment is trusted
-   by its SSH users and the recorder service already requires them.
-4. Acceptance-test access as `irae` and a second `rec-media` member: inspect
-   logs, read/write recording artifacts, inspect cookie files, and confirm
-   that the API/reconciler continue to operate with the shared permissions.
+   recordings, logs, and cookie files needed to operate the box.
+2. Redirect each recorder unit's stderr into the shared, group-owned log tree
+   instead of leaving it only in the journal, so `irae` can tail a recording's
+   log directly over SSH with no `su`/`sudo`.
+3. Verify as `irae` over SSH, no `su`: tail a live recording's log file and
+   read a cookie file directly from the shared tree.
 
 ### Next step — split dependencies from code for fast deployment
 
