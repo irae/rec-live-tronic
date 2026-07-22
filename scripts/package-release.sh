@@ -11,6 +11,7 @@ mkdir -p "$output_dir" "$stage/$release_name"
 cp -R /release-source/dist /release-source/node_modules /release-source/migrations /release-source/systemd "$stage/$release_name/"
 mkdir -p "$stage/$release_name/scripts"
 cp /release-source/scripts/install-root.sh "$stage/$release_name/scripts/"
+chmod 0755 "$stage/$release_name/scripts/install-root.sh"
 cp /release-source/package.json /release-source/package-lock.json "$stage/$release_name/"
 cp /release-source/.env.example "$stage/$release_name/"
 
