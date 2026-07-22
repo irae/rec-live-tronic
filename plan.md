@@ -359,6 +359,64 @@ sketch (pending owner review); this block fixes only its scope and boundaries.
 4. Verify the client against real recordings and confirm no operation requires a
    browser-only path (curl parity preserved).
 
+#### Phase 2 design sketch — DRAFT, pending owner review
+
+> **This subsection is a draft for the owner to react to, not a committed
+> design or an implementation-ready plan.** ~5-minute read. Nothing here is
+> built until the owner picks a theme (gate below) and signs off.
+
+**Shape.** One small single-page app served by the existing `web` service off
+the same public API — no second service, no build-heavy framework. Two views:
+an **archive list** (finished recordings, newest first, tap to open detail) and
+a **schedule** view (the create form + upcoming/running list with inline
+edit/cancel/stop-early/start-now). A recording **detail** panel holds the
+player and the share affordances below. Keep it plain: server-rendered or a
+tiny amount of vanilla JS/fetch against the JSON API, not a SPA framework unless
+the theme chosen below argues for one.
+
+**Mobile-first, genuinely responsive.** Design at phone width first (single
+column, thumb-reachable actions), then let it breathe on desktop (list + detail
+side by side past a breakpoint). Not a phone-only site scaled up — desktop is a
+first-class second target, just not the starting point.
+
+**Playback + share affordances (recording detail).**
+- **Native player.** HTML5 `<video controls>` at the Phase 1
+  `GET /recordings/:id/file` URL, browser built-in controls only (already the
+  committed scope above).
+- **Copy stream URL.** A always-present "copy stream URL" button that puts the
+  plain `http://<host>:<port>/recordings/<id>/file` URL on the clipboard, so the
+  owner can paste it into VLC's *Open Network Stream* by hand on any device,
+  regardless of any deep-link support. This is the reliable fallback and should
+  never be gated behind platform detection.
+- **VLC-iOS hand-off (optional, best-effort, iOS only).** VLC for iOS does
+  support a hand-off URL scheme:
+  `vlc-x-callback://x-callback-url/stream?url=<stream-URL>` (use this form; the
+  plain `vlc://` scheme is unreliable). Offer it as an **optional "Open in VLC"
+  link shown on iOS only**, clearly secondary to the native `<video>` player and
+  to the copy-URL fallback, which stay primary and reliable. Known caveats make
+  it best-effort, not a guaranteed feature: it fails silently if VLC isn't
+  installed, Safari shows an unavoidable "Open in VLC?" confirmation prompt, and
+  reliability is inconsistent (some users report it working at most a couple of
+  times, or failing via the scheme while the same stream opens fine when pasted
+  manually). Frame it in the UI as "may not always work — use copy-URL if it
+  doesn't." (An HLS/segmented-playlist pipeline was considered as a "more native"
+  iOS path and rejected: it is a materially bigger feature than the plain
+  single-file `sendFile()` route already built and verified, and contradicts the
+  simplicity guidelines for a marginal gain.)
+
+**Design-prototype gate (before any real implementation).** Produce **three
+competing static-HTML visual themes** — full look-and-feel mockups with dummy
+data, no backend wiring — in a **git-ignored folder** (e.g. `design-prototypes/`,
+added to `.gitignore`) so the owner can open each in a browser and pick one.
+Real Phase 2 implementation does not start until the owner selects a theme; the
+chosen theme's HTML/CSS becomes the styling basis, the other two are discarded.
+
+**Testing approach.** Playwright, deliberately light. Use Playwright's built-in
+**iPhone device profile** (e.g. `devices['iPhone 13']`) for basic mobile-viewport
+emulation of the core flows (list loads, schedule create, open detail, player
+present, copy-URL works), plus a desktop-viewport pass. This is smoke-level
+device emulation, **not** exhaustive cross-device/browser mobile QA.
+
 ### Phase 3 — file operations
 
 **Complexity: Medium.** Non-destructive derived-recording operations over
