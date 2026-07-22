@@ -4,6 +4,33 @@ This plan turns `spec.md` into an implementation sequence. Phase 0 is the first
 release and must be independently usable from `curl`. Later phases do not alter
 the Phase 0 recording path.
 
+## Simplicity guidelines (all future work)
+
+These govern every new block from here on. They do not retroactively rewrite or
+weaken already-shipped Phase 0 behaviour — the systemd hardening flags,
+permission modes, sole-SQLite-writer invariant, sandboxed transient units, and
+existing configuration all stay exactly as they are. "Simplify" means build the
+next thing simply, not rip out working infrastructure.
+
+- **Hardcode over configure.** Only make something configurable when it must
+  genuinely differ between dev and the target host (paths, ports, the listen
+  host). Anything that could theoretically vary but never will in practice is
+  just a hardcoded constant.
+- **Minimise code.** Every line is a maintenance liability. Prefer the standard
+  library or an existing dependency's built-in behaviour over hand-rolled
+  machinery, and never build generic/extensible abstractions for a single
+  current use case.
+- **No integrity/checksum ceremony for internal deploy artifacts** moving
+  between machines the owner controls: tar it, copy it, untar it — that is the
+  whole verification story. This is deploy-pipeline ceremony, not a safety
+  property; it does not relax the real recording/security architecture
+  (SQLite sole-writer, no-shell-injection, sandboxed transient units, etc.),
+  which stays intact.
+- **Never weaken test coverage to simplify.** Tests are the regression safety
+  net; simplification targets implementation and process, not verification. If
+  removing a code path removes its reason to exist, delete the now-dead test
+  with it — but never leave behaviour untested to save effort.
+
 ## Decisions made for Phase 0
 
 - Use Node.js 24 LTS, TypeScript compiled to JavaScript, npm, Express, and
@@ -275,9 +302,9 @@ Two independent blocks; commit each when complete, not its sub-steps.
 
 #### Part A — VLC-openable streaming route
 
-**Complexity: Medium.** The handler is a conventional Express file route over a
-finished, fixed-size file; range requests and the ID→path derivation supply the
-integration risk.
+**Complexity: Low.** One Express route over a finished, fixed-size file.
+Express's `response.sendFile()` already handles `Range`/`206`/`Content-Length`
+correctly, so the only real work is the status gate and the ID→path derivation.
 
 This resolves `spec.md`'s "File sharing / network URL" open decision in favour
 of the simplest option: a static file route on the existing public Express API.
@@ -298,26 +325,28 @@ file lifecycle).
 1. Add `GET /recordings/:id/file` to `createApp` in `src/app.ts`, backed by
    `deps.recorder`. Resolve the recording with
    `RecorderService.getRecording(id)`; derive the on-disk path only from the
-   stored `ts_path` (later `final_path` once muxed), never from request data,
-   and assert the resolved real path stays within `config.recordingsDir`.
-   Respond `404` when the recording or its file is absent, and `409` when its
-   status is `scheduled` or `recording` (file not ready to stream — not a
-   missing-file 404, and not a partial-file stream either).
-2. Serve finished (`recorded`/`muxed`) files with full range support: send
-   `Accept-Ranges: bytes`, honour `Range`, reply `206` + `Content-Range` for a
-   partial request and `200` + `Content-Length` otherwise so VLC can seek. Set
-   a video/MP2T (`.ts`) content type. Stream via a `createReadStream` bounded to
-   the requested range and destroy it on client disconnect.
+   stored `ts_path` (later `final_path` once muxed), never from request data.
+   Respond `404` when the recording does not exist, and `409` when its status is
+   `scheduled` or `recording` (file not ready to stream — the still-recording
+   non-goal above; not a missing-file 404, and not a partial-file stream
+   either).
+2. For a finished (`recorded`/`muxed`) recording, hand the resolved path to
+   `response.sendFile()`. Express already answers `Range` requests with
+   `206`/`Content-Range`, sends `Content-Length`/`Accept-Ranges` otherwise, and
+   404s a path that is not under its configured root, so VLC seeking works with
+   no hand-rolled range logic. Set a video/MP2T content type for the `.ts` case.
 3. Treat this route as the stable per-file network URL sketched in `spec.md`'s
    API surface. Document the VLC-openable form
    `http://<host>:<port>/recordings/<id>/file` in `README.md` beside the curl
    examples.
-4. Extend the functional server suite (test names only):
+4. Extend the functional server suite (test names only) — cover only what is
+   ours to test; `sendFile`'s own range handling is Express's to test, not
+   ours:
 
 ```ts
 // test/functional/server.test.ts (additional blocks)
-t.test("streams a finished recording with range requests for VLC seeking");
-t.test("rejects file paths escaping the recordings root and 404s a missing file");
+t.test("serves a finished recording's file");
+t.test("404s a recording that does not exist");
 t.test("returns 409 for a recording that is still scheduled or in progress");
 ```
 
@@ -331,56 +360,58 @@ children of the API or reconciler process, so restarting either service today
 already does not kill in-progress recordings. This split therefore buys
 independent update/restart cadence and smaller, faster per-service deploys — not
 recording safety, which already exists. On the owner's slow connection the real
-win is the `deps` package: `node_modules` is the only large transfer and is
-skipped whenever its fingerprint is unchanged. This absorbs and replaces the
-former "split dependencies from code for fast deployment" next-step block, which
-is removed to avoid duplication.
+win is the `deps` package: `node_modules` is the only large transfer, so it is
+its own tarball and is only re-sent when `package-lock.json` actually changes.
+This absorbs and replaces the former "split dependencies from code for fast
+deployment" next-step block, which is removed to avoid duplication.
 
-Package boundaries:
-- **`deps`** — production `node_modules` only, immutable, keyed by lockfile
-  digest + Node major + module ABI + `linux/amd64`. Reused across deploys while
-  that fingerprint is unchanged.
-- **`web`** — `dist/`, `migrations/`, `systemd/rec-live-tronic-api.service`, the
-  `.env.example` config template, and a manifest recording the required `deps`
-  fingerprint. Runs `node dist/server.js`.
+No checksums or manifests. Packaging is `tar`; installing is `untar`. The
+"did dependencies change?" check is a plain lockfile comparison, not a computed
+fingerprint — see step 4.
+
+Package boundaries (one copy of each on the target, no versioned/`current`
+directory tree):
+- **`deps`** — production `node_modules` for `linux/amd64`, plus the
+  `package-lock.json` it was built from, which stays alongside it on the target
+  as the change-detection marker.
+- **`web`** — `dist/`, `migrations/`, `systemd/rec-live-tronic-api.service`, and
+  the `.env.example` config template. Runs `node dist/server.js`.
 - **`reconciler`** — `dist/`, `systemd/rec-live-tronic-reconciler.service` and
-  `.timer`, and a manifest recording the required `deps` fingerprint. Runs
-  `node dist/reconciler/main.js`.
+  `.timer`. Runs `node dist/reconciler/main.js`.
 
 `dist/` is small and shared by both entry points (the reconciler imports
 `../api/service.js`, `../config.js`, and other compiled modules), so `web` and
 `reconciler` each carry a full `dist/` copy rather than introducing a third
-shared-code package; only the large `node_modules` is deduplicated via `deps`.
+shared-code package; only the large `node_modules` lives once, in `deps`.
 
-1. Change `scripts/package-release.sh` to emit three artifacts instead of one
-   tarball — `rec-live-tronic-deps-<fingerprint>.tar.gz`,
-   `rec-live-tronic-web-<version>.tar.gz`, and
-   `rec-live-tronic-reconciler-<version>.tar.gz`, each with its own
-   manifest/checksum. The two code manifests record the `deps` fingerprint they
-   require. `scripts/build-release.sh` still runs the container build/tests once
-   and produces all three.
-2. Lay out `/opt/rec-live-tronic` per package: `deps/<fingerprint>/`,
-   `web/<version>/`, and `reconciler/<version>/`, each with an atomic `current`
-   selector. Each code release's `node_modules` is a symlink to the matching
-   `deps/<fingerprint>`; deploy refuses to link an incompatible fingerprint.
-3. Point `systemd/rec-live-tronic-api.service` at `web/current` and the
-   reconciler service/timer at `reconciler/current` (ExecStart/WorkingDirectory),
-   each resolving `node_modules` through its release symlink. Both keep reading
-   the same `/etc/rec-live-tronic` config and the same `/var/lib/rec-live-tronic`
-   SQLite and `/srv/rec-live-tronic/recordings`; the API stays the sole SQLite
-   writer and the reconciler still transitions through the private socket.
+1. Change `scripts/package-release.sh` to emit three plain `.tar.gz` artifacts
+   instead of one — `rec-live-tronic-deps.tar.gz`, `rec-live-tronic-web.tar.gz`,
+   and `rec-live-tronic-reconciler.tar.gz`. No checksum files, no manifests.
+   `scripts/build-release.sh` still runs the container build/tests once and
+   produces all three.
+2. Lay out `/opt/rec-live-tronic/{deps,web,reconciler}`, one directory each.
+   `web` and `reconciler` resolve dependencies through a single static
+   `node_modules` symlink pointing at `../deps/node_modules`.
+3. Point `systemd/rec-live-tronic-api.service` at `web/` and the reconciler
+   service/timer at `reconciler/` (ExecStart/WorkingDirectory), each resolving
+   `node_modules` through that symlink. Both keep reading the same
+   `/etc/rec-live-tronic` config and the same `/var/lib/rec-live-tronic` SQLite
+   and `/srv/rec-live-tronic/recordings`; the API stays the sole SQLite writer
+   and the reconciler still transitions through the private socket.
 4. Update `scripts/install-root.sh` (still the first-install/bootstrap path) to
-   install all three packages, link `deps`, and start both services. Add a fast
-   code-only deploy script that transfers only the changed `web` and/or
-   `reconciler` package with `rsync --checksum` into a staging release, links the
-   matching existing `deps` fingerprint, runs the health/socket/reconciler
-   verification, and atomically flips only that service's `current` before
-   restarting only that service. Transfer `deps` only when its fingerprint
-   changes; never rsync into an active release.
+   untar all three packages, create the `node_modules` symlink, and start both
+   services. Add a fast code-only deploy script that copies over only the
+   changed `web` and/or `reconciler` tarball, replaces that one directory, and
+   restarts only that service — leaving the other service and `deps` untouched.
+   Send `deps` only when it changed: `cmp` the release's `package-lock.json`
+   against the one already sitting in `/opt/rec-live-tronic/deps`; identical
+   means the huge `node_modules` transfer is skipped entirely. Replace a
+   service's directory whole (untar beside it, swap it in) rather than writing
+   into the live one.
 5. Verify on `irae-sheeta`: redeploy `web` alone and confirm the reconciler
    service and any live `rec-*` units are untouched; redeploy `reconciler` alone
    and confirm the API stays up; confirm a code-only deploy transfers no
-   `node_modules` when the lockfile is unchanged.
+   `node_modules` when `package-lock.json` is unchanged.
 
 > Open question: this split assumes `web` and `reconciler` stay co-located on one
 > host sharing the SQLite file, private socket, and recordings tree. Splitting
