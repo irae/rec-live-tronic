@@ -13,6 +13,23 @@ Where a decision below was actually made in the design discussion it is stated
 plainly; where it is carried over from `spec.md` or inferred rather than
 explicitly decided, it is marked ⚠ so it can be confirmed against real intent.
 
+## Core durable traits
+
+Properties that must hold regardless of implementation detail. The mechanisms
+are detailed further down (see "How recording works" and "Process restart vs.
+live recordings"); this list is the pointer, not the depth.
+
+- **A recording survives restart, redeploy, or reboot of the managing
+  process(es).** Hard requirement, not a tradeoff: Streamlink runs detached in
+  its own process group, so redeploying the API, web, or even the recorder
+  process for unrelated work cannot kill an in-progress capture.
+- **SQLite is the sole source of truth and queue** — two physical files, an
+  essential one and a disposable/rebuildable one.
+- **Single-writer-per-table (ownership) discipline** — more than one process may
+  write SQLite, but no two ever write the same lifecycle fields.
+- **A bad UI or API deployment must never stop or corrupt a live recording** —
+  the recording core is narrowly scoped and independently deployable.
+
 ## Why move away from systemd
 
 Phase 0 put four independently-timed pieces in the critical recording path: the
@@ -50,12 +67,12 @@ every failure hit during acceptance.
   The recording core is narrowly scoped, rarely changed, and independently
   deployable; user-facing features churn on their own process and their own
   database.
-- **Recordings survive process restarts and reboots** through durable SQLite
-  intent + a startup reconciliation pass, not through detached init units. ⚠ See
-  "Process restart vs. live recordings" — whether an in-progress capture
-  survives a restart of the *recorder* process specifically is the one real
-  tradeoff this design introduces and is not fully resolved in the source
-  discussion.
+- **Recordings survive restart, redeploy, and reboot of the managing
+  process(es).** Streamlink is spawned detached (its own process group), so a
+  restart or redeploy of any Node process — including the recorder — leaves an
+  in-progress capture running; durable SQLite intent + a startup
+  re-adoption/reconciliation pass reconnect to it. See "Process restart vs. live
+  recordings" for the mechanism.
 - No auth for now, same single-middleware-seam posture and configurable listen
   host as `spec.md`. Tailscale/LAN/firewall/VPS remain deployment concerns.
 
@@ -148,20 +165,43 @@ absent after reboot. ⚠ The `boot_id` distinction between "lost to reboot" and
 "exited on this boot" (a Phase 0 field) is assumed to carry over; not
 re-discussed.
 
-### ⚠ Process restart vs. live recordings (the one real tradeoff)
+### Process restart vs. live recordings (resolved)
 
-In Phase 0, recordings were **detached** systemd transient units, so restarting
-the API or reconciler could not kill an in-progress capture. In this design the
-recorder spawns Streamlink as **its own children** and tracks their PIDs, so a
-restart of `rec-live-tronic` would, in the naive form, kill active captures
-(recovered on the next startup pass, resuming the same append-safe `.ts`). The
-design's answer is organizational: the recorder is deliberately the small,
-stable, rarely-updated service, so restarts are rare — churn happens in the API
-and web processes, which cannot touch the children. Whether this is acceptable,
-or whether the recorder should re-adopt a detach-and-track mechanism (e.g.
-double-fork / a lightweight per-recording supervisor) to make captures survive
-its own restart, was **not settled** in the discussion and must be decided
-before this becomes a plan.
+"A recording survives restart/redeploy of the managing process(es)" is a **hard
+requirement** (see "Core durable traits"), not an optional tradeoff. In Phase 0
+it was guaranteed by detached systemd transient units. This design guarantees it
+at the OS level instead, without reintroducing per-recording systemd units.
+
+Two options were weighed:
+
+- **(a)** Keep an OS-level supervisor for Streamlink specifically — `systemd-run`
+  transient units exactly as `spec.md` does today — while the three Node
+  processes replace systemd only for scheduling, API, the reconciler loop, and
+  the socket. Streamlink's detachment is unchanged; only the topology around it
+  moves.
+- **(b)** The recorder spawns Streamlink via Node's
+  `child_process.spawn(…, { detached: true })` + `child.unref()`, placing it in
+  its own process group so it outlives the recorder being killed or restarted —
+  the same OS mechanism `nohup`/`systemd-run` rely on, not systemd-specific.
+
+**Decision: (b).** It guarantees the trait with the same kernel primitive as (a)
+(process-group detachment), but stays inside this redesign's premise: no
+per-recording systemd unit, which this candidate lists as an explicit non-goal.
+(a) would re-add the transient-unit lifecycle this redesign exists to remove.
+
+The gap (b) does not close for free: after a restart the new recorder process has
+no in-memory handle to the still-running child. So the recorder persists enough
+identity in `rec-live-tronic.sqlite` — the PID plus a verification check (e.g.
+confirming `/proc/<pid>/cmdline` still shows `streamlink` and the expected URL,
+since PIDs get reused) — and on startup **re-adopts** any still-alive capture
+instead of relaunching it. This is functionally the same problem Phase 0's
+`last_started_boot_id` field solves, now owned by the recorder rather than
+systemd.
+
+⚠ Still to settle when this becomes a plan: the exact re-adoption/verification
+procedure and its robustness against PID reuse — what the recorder persists, how
+it distinguishes a re-used PID from the real capture, and the fallback when
+verification is inconclusive.
 
 ## Inter-process communication
 
@@ -228,10 +268,10 @@ with the "prove the record path first" lesson and must be confirmed:
 
 ## Open decisions (resolve before this becomes a plan; do NOT invent)
 
-- ⚠ **Recorder restart vs. live captures** — accept "recorder restart kills and
-  then resumes the capture," or re-introduce a detach/track mechanism so
-  captures outlive a recorder restart. The central unresolved tradeoff (see
-  above).
+- **Recorder restart vs. live captures** — *resolved:* captures outlive a
+  recorder restart via detached `spawn` + startup re-adoption (see "Process
+  restart vs. live recordings"). ⚠ Remaining implementation detail: the
+  re-adoption/verification procedure and its robustness against PID reuse.
 - ⚠ **Immediate-action control socket** — keep pure SQLite-intent polling, or
   add a small private recorder control socket for zero-latency cancel/stop.
 - ⚠ **Reconciliation interval** — the loop tick for the recorder (Phase 0 used a

@@ -3,6 +3,24 @@
 Architecture specification. **Architecture only — do not implement yet.**
 Build in phase order. Phase 0 must be usable via `curl` and reliably record today; everything else iterates on top.
 
+## Core durable traits
+
+Properties that must hold regardless of implementation detail. The mechanisms
+that achieve them are detailed further down (see "How recording works"); this
+list is the pointer, not the depth.
+
+- **A recording survives restart, redeploy, or reboot of the managing
+  process(es).** The recorder is a detached systemd transient unit, never a
+  child of the API or reconciler, so redeploying either for unrelated work
+  cannot kill an in-progress capture.
+- **SQLite (WAL) is the sole source of truth and queue.** systemd units are
+  disposable and rebuilt from SQLite on every tick.
+- **The API is the only SQLite writer in normal operation** (single-writer
+  discipline); the reconciler reads and acts.
+- **No request data ever becomes a PID, shell word, path, or unit identifier.**
+  The live unit is derived from the durable recording ID; the app never stores
+  or controls a PID.
+
 ## Goal & principles
 
 - Reliably record scheduled YouTube live streams, multiple in parallel.
