@@ -47,6 +47,7 @@ export interface CreateRecordingInput {
 
 export interface UpdateScheduledDetails {
   title?: string;
+  quality?: string;
   startAt?: UtcInstant;
   stopAt?: UtcInstant;
   now?: UtcInstant;
@@ -163,6 +164,10 @@ export class RecordingRepository {
       fields.push("title = ?");
       values.push(patch.title);
     }
+    if (patch.quality !== undefined) {
+      fields.push("quality = ?");
+      values.push(patch.quality);
+    }
     if (patch.startAt !== undefined) {
       startAt = timestamp(patch.startAt, "startAt");
       fields.push("start_at = ?");
@@ -177,7 +182,7 @@ export class RecordingRepository {
     return this.database.transaction((): MutationResult<Recording> => {
       const existing = this.getById(id);
       if (existing === undefined) return { outcome: "not_found" };
-      if (existing.status === "recording" && (patch.title !== undefined || patch.startAt !== undefined || patch.stopAt === undefined)) {
+      if (existing.status === "recording" && (patch.title !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined)) {
         return { outcome: "conflict" };
       }
       if (existing.status !== "scheduled" && existing.status !== "recording") return { outcome: "conflict" };
