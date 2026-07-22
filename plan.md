@@ -448,6 +448,40 @@ file-state transitions.
    `final_path` files through the Phase 1 `GET /recordings/:id/file` route
    (already built for `.ts`). No separate serving-design decision remains.
 
+Operator trim (cut by timestamp). Recordings are deliberately padded — the
+owner schedules 10–20 min of buffer before and after the real event — so cutting
+a finished file down to its true content boundary (e.g. a B2B set that actually
+started 14m36s in) is a recurring need, not a one-off. This is a file-lifecycle
+operation on an already-finished file: it never touches the recorder core and
+reuses this phase's `ffmpeg -c copy` mux machinery, only parameterised with
+`-ss`/`-to`.
+
+5. Add `POST /recordings/:id/trim` (curl-first JSON: `{ "start": "14:36",
+   "end"?: "1:23:45" }`, at least one of `start`/`end` required, ffmpeg-format
+   offsets, with `duration` accepted as an alias for `end`). The source must be
+   finished (`recorded`/`muxed`) or the route returns `409`; `404` if it does
+   not exist. The route creates a **new derived recording row** with its own
+   server-generated ID whose output path derives only from that new ID — the
+   source row, its `ts_path`, and its `final_path` are never modified or
+   deleted, so a bad cut is never destructive.
+6. Run the cut as a `mux-<id>` transient unit for the new derived ID (same unit
+   type, concurrency accounting, and crash/reboot reconciliation as step 2),
+   invoking `ffmpeg -ss <start> [-to <end>] -i <source> -c copy <new-output>`.
+   Offsets are validated numeric/`HH:MM:SS` values passed as argv, never shell
+   fragments. Publish the derived recording as finished only on atomic success;
+   on failure preserve every file and leave the derived row `failed`.
+7. The derived recording is listed, served, and itself re-trimmable exactly like
+   any other recording through the existing `GET /recordings/:id/file` route — no
+   new serving path is introduced. Extend the functional server suite (test
+   names only):
+
+```ts
+// test/functional/server.test.ts (additional blocks)
+t.test("trims a finished recording into a new derived recording");
+t.test("rejects a trim of a source that is not finished");
+t.test("leaves the source recording's row and file untouched after a trim");
+```
+
 ### Phase 4 — web client and stable media URLs
 
 **Complexity: Medium.** The UI is conventional; the chosen media-serving
