@@ -12,6 +12,7 @@ cp -R /release-source/dist /release-source/node_modules /release-source/migratio
 mkdir -p "$stage/$release_name/scripts"
 cp /release-source/scripts/install-root.sh "$stage/$release_name/scripts/"
 cp /release-source/package.json /release-source/package-lock.json "$stage/$release_name/"
+cp /release-source/.env.example "$stage/$release_name/"
 
 lock_digest=$(sha256sum /release-source/package-lock.json | awk '{print $1}')
 build_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -64,4 +65,7 @@ cat > "$sidecar_manifest" <<EOF
 EOF
 
 tar -tzf "$tarball" >/dev/null
+for required_path in "$release_name/.env.example" "$release_name/manifest.json" "$release_name/scripts/install-root.sh" "$release_name/systemd/rec-live-tronic-api.service" "$release_name/systemd/rec-live-tronic-reconciler.service" "$release_name/systemd/rec-live-tronic-reconciler.timer"; do
+  tar -tzf "$tarball" | grep -Fx "$required_path" >/dev/null || { printf '%s\n' "missing packaged file: $required_path" >&2; exit 1; }
+done
 (cd "$output_dir" && sha256sum -c "$(basename "$tarball").sha256")

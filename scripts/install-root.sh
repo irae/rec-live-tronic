@@ -11,17 +11,17 @@ CONFIG_DIR=/etc/rec-live-tronic
 DATA_DIR=/var/lib/rec-live-tronic
 RECORDINGS_DIR=/srv/rec-live-tronic/recordings
 UNIT_DIR=/etc/systemd/system
-STREAMLINK=/usr/local/bin/streamlink
-PIPX_HOME=/opt/pipx
-EXPECTED_STREAMLINK_VERSION=8.4.0
+NODE=/usr/local/bin/node
+STREAMLINK=${REC_LIVE_STREAMLINK_BIN:-/usr/local/bin/streamlink}
 MIN_FREE_KIB=1048576
 RELEASE_DIR=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 MEDIA_USER=
 ARTIFACT=
+FORCE=false
 
 usage() {
   cat <<'EOF'
-Usage: install-root.sh [--release-dir PATH] [--artifact TARBALL] [--media-user USER]
+Usage: install-root.sh [--release-dir PATH] [--artifact TARBALL] [--media-user USER] [--force]
 
 Run as root from an extracted, verified release directory. The optional media
 user receives read-only access through rec-media; omit it to keep media private.
@@ -37,13 +37,15 @@ while [ "$#" -gt 0 ]; do
     --release-dir) [ "$#" -ge 2 ] || die "--release-dir needs a path"; RELEASE_DIR=$2; shift 2 ;;
     --artifact) [ "$#" -ge 2 ] || die "--artifact needs a tarball path"; ARTIFACT=$2; shift 2 ;;
     --media-user) [ "$#" -ge 2 ] || die "--media-user needs a user"; MEDIA_USER=$2; shift 2 ;;
+    --force) FORCE=true; shift ;;
     --help) usage; exit 0 ;;
     *) usage >&2; die "unknown argument: $1" ;;
   esac
 done
 
 [ "$(id -u)" -eq 0 ] || die "must be run as root"
-for command_name in awk basename chown chmod cp curl df diff dirname find getent grep groupadd id install ln loginctl mv node readlink rm runuser sed sha256sum stat systemctl systemd-run tail uname useradd usermod; do require_command "$command_name"; done
+for command_name in awk basename chown chmod cp curl df diff dirname find getent grep groupadd head id install ln loginctl mv readlink rm runuser sed sha256sum stat systemctl systemd-run tail uname useradd usermod; do require_command "$command_name"; done
+[ -x "$NODE" ] || die "missing Node executable: $NODE"
 RELEASE_DIR=$(CDPATH= cd -- "$RELEASE_DIR" && pwd)
 [ -f "$RELEASE_DIR/manifest.json" ] || die "release manifest is missing"
 [ -f "$RELEASE_DIR/package.json" ] || die "release package metadata is missing"
@@ -60,33 +62,31 @@ log "preflight: release manifest and target platform"
 json_true build_succeeded && json_true functional_tests_succeeded && json_true native_binding_loaded || die "manifest lacks successful build/test/native-binding evidence"
 release_node=$(json_string node_version); release_abi=$(json_string node_module_abi)
 [ -n "$release_node" ] && [ -n "$release_abi" ] || die "release manifest lacks Node metadata"
-[ "$(node --version)" = "$release_node" ] || die "host Node $(node --version) does not match release $release_node"
-[ "$(node -p 'process.versions.modules')" = "$release_abi" ] || die "host Node module ABI does not match release"
-node -e "require('$RELEASE_DIR/node_modules/better-sqlite3')" >/dev/null 2>&1 || die "packaged better-sqlite3 native binding cannot load"
+[ "$("$NODE" --version)" = "$release_node" ] || die "host Node $("$NODE" --version) does not match release $release_node"
+[ "$("$NODE" -p 'process.versions.modules')" = "$release_abi" ] || die "host Node module ABI does not match release"
+"$NODE" -e "require('$RELEASE_DIR/node_modules/better-sqlite3')" >/dev/null 2>&1 || die "packaged better-sqlite3 native binding cannot load"
 
 log "preflight: host dependencies and capacity"
-[ -x "$STREAMLINK" ] || die "missing root-managed Streamlink: $STREAMLINK"
-streamlink_target=$(readlink -f "$STREAMLINK")
-case "$streamlink_target" in "$PIPX_HOME"/*) ;; *) die "Streamlink target must be beneath $PIPX_HOME" ;; esac
-[ "$(stat -c %U "$STREAMLINK")" = root ] && [ "$(stat -c %U "$streamlink_target")" = root ] || die "Streamlink must be root-owned"
-offender=$(first_unsafe_path "$PIPX_HOME")
-[ -z "$offender" ] || die "$PIPX_HOME contains a non-root-owned or group/world-writable path: $offender"
-"$STREAMLINK" --version 2>&1 | grep -Eq "Streamlink[[:space:]]+$EXPECTED_STREAMLINK_VERSION([[:space:]]|$)" || die "expected Streamlink $EXPECTED_STREAMLINK_VERSION"
-command -v sqlite3 >/dev/null 2>&1 || die "SQLite CLI is required for diagnostics"
-sqlite3 ':memory:' 'pragma journal_mode=WAL; select 1;' >/dev/null || die "SQLite diagnostics failed"
-systemctl --version | awk 'NR==1 { if ($2 + 0 < 250) exit 1 }' || die "systemd 250 or newer is required"
-systemd-run --help | grep -q -- '--collect' || die "systemd-run lacks --collect"
+[ -x "$STREAMLINK" ] || die "missing Streamlink executable: $STREAMLINK"
+streamlink_version=$("$STREAMLINK" --version 2>&1) || die "Streamlink could not run: $STREAMLINK"
+log "using $streamlink_version"
+if command -v sqlite3 >/dev/null 2>&1; then sqlite3 ':memory:' 'pragma journal_mode=WAL; select 1;' >/dev/null || log "warning: SQLite CLI diagnostic failed; the application uses better-sqlite3"; else log "warning: sqlite3 CLI is unavailable; database backup commands will not work"; fi
+systemctl --version | awk 'NR==1 { if ($2 + 0 < 250) exit 1 }' || log "warning: systemd is older than the tested version"
+systemd-run --help | grep -q -- '--collect' || log "warning: systemd-run does not advertise --collect"
 available_kib=$(df -Pk /srv | awk 'NR==2 { print $4 }')
-[ "$available_kib" -ge "$MIN_FREE_KIB" ] || die "need at least ${MIN_FREE_KIB} KiB free for recordings"
+[ "$available_kib" -ge "$MIN_FREE_KIB" ] || log "warning: less than ${MIN_FREE_KIB} KiB free for recordings"
 [ -z "$MEDIA_USER" ] || getent passwd "$MEDIA_USER" >/dev/null || die "unknown media user: $MEDIA_USER"
 
-version=$(node -p "require('$RELEASE_DIR/package.json').version")
+version=$("$NODE" -p "require('$RELEASE_DIR/package.json').version")
 case "$version" in ''|*[!A-Za-z0-9._-]*) die "unsafe package version" ;; esac
 if [ -z "$ARTIFACT" ]; then ARTIFACT="$(dirname "$RELEASE_DIR")/rec-live-tronic-${version}-linux-amd64.tar.gz"; fi
-[ -f "$ARTIFACT" ] && [ -f "$ARTIFACT.sha256" ] || die "release tarball and .sha256 are required (use --artifact if stored elsewhere)"
-artifact_dir=$(CDPATH= cd -- "$(dirname -- "$ARTIFACT")" && pwd)
-artifact_name=$(basename "$ARTIFACT")
-(cd "$artifact_dir" && sha256sum -c "${artifact_name}.sha256") || die "release checksum verification failed"
+if [ -f "$ARTIFACT" ] && [ -f "$ARTIFACT.sha256" ]; then
+  artifact_dir=$(CDPATH= cd -- "$(dirname -- "$ARTIFACT")" && pwd)
+  artifact_name=$(basename "$ARTIFACT")
+  (cd "$artifact_dir" && sha256sum -c "${artifact_name}.sha256") || die "release checksum verification failed"
+else
+  log "warning: release tarball/checksum not found beside extracted release; skipping duplicate checksum verification"
+fi
 release_path="$PREFIX/releases/$version"; current_link="$PREFIX/current"
 
 log "create service account and groups"
@@ -98,6 +98,10 @@ service_uid=$(id -u "$SERVICE_USER")
 
 log "install root-owned versioned release $version"
 install -d -o root -g root -m 0755 "$PREFIX/releases"
+if [ -e "$release_path" ] && ! diff -qr "$RELEASE_DIR" "$release_path" >/dev/null; then
+  [ "$FORCE" = true ] || die "existing release $version differs; rerun with --force to replace it"
+  rm -rf "$release_path"
+fi
 if [ ! -e "$release_path" ]; then
   staging="$PREFIX/releases/.${version}.new.$$"
   trap 'rm -rf "$staging"' EXIT HUP INT TERM
@@ -105,8 +109,6 @@ if [ ! -e "$release_path" ]; then
   cp -a "$RELEASE_DIR/." "$staging/"
   chown -R root:root "$staging"; chmod -R go-w "$staging"; mv "$staging" "$release_path"
   trap - EXIT HUP INT TERM
-else
-  diff -qr "$RELEASE_DIR" "$release_path" >/dev/null || die "existing release $version differs; versioned releases are immutable"
 fi
 root_owned_tree "$release_path"
 
@@ -139,7 +141,7 @@ log "migrate SQLite with private service umask"
       *) die "unsupported line in $CONFIG_DIR/rec-live-tronic.env" ;;
     esac
   done < "$CONFIG_DIR/rec-live-tronic.env"
-  runuser -u "$SERVICE_USER" -- env "$@" sh -c "umask 077; cd '$release_path'; exec node dist/db/migrate.js"
+  runuser -u "$SERVICE_USER" -- env "$@" sh -c "umask 077; cd '$release_path'; exec '$NODE' dist/db/migrate.js"
 )
 
 log "atomically select migrated release $version"

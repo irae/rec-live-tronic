@@ -17,6 +17,7 @@ WORKDIR /release-source
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/package.json /app/package-lock.json ./
+COPY --from=build /app/.env.example ./.env.example
 COPY --from=build /app/migrations ./migrations
 COPY --from=build /app/systemd ./systemd
 COPY --from=build /app/scripts/install-root.sh ./scripts/install-root.sh
