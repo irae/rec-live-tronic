@@ -147,22 +147,39 @@ log "migrate SQLite with private service umask"
 log "atomically select migrated release $version"
 ln -sfn "$release_path" "$current_link.new"; mv -Tf "$current_link.new" "$current_link"
 
-log "reload, enable, and start API and reconciliation timer"
-systemctl daemon-reload; systemctl enable --now "$SERVICE-api.service" "$SERVICE-reconciler.timer"; systemctl restart "$SERVICE-api.service"; systemctl start "$SERVICE-reconciler.service"
+private_socket=$(sed -n 's/^REC_LIVE_PRIVATE_SOCKET=//p' "$CONFIG_DIR/rec-live-tronic.env" | tail -n 1); private_socket=${private_socket:-/run/rec-live-tronic/api.sock}
+wait_for_private_socket() {
+  socket_attempt=0
+  while [ "$socket_attempt" -lt 30 ] && [ ! -S "$private_socket" ]; do sleep 1; socket_attempt=$((socket_attempt + 1)); done
+  [ -S "$private_socket" ]
+}
+
+log "reload, enable, and start API before reconciliation"
+systemctl daemon-reload; systemctl enable "$SERVICE-api.service"; systemctl restart "$SERVICE-api.service"
+wait_for_private_socket || die "private API socket was not created: $private_socket"
+systemctl enable --now "$SERVICE-reconciler.timer"
 
 log "post-install verification"
 systemctl is-active --quiet "$SERVICE-api.service"; systemctl is-active --quiet "$SERVICE-reconciler.timer"
 test "$(stat -c '%U:%G %a' "$DATA_DIR")" = "$SERVICE_USER:$SERVICE_GROUP 700" || die "incorrect data directory mode"
 test "$(stat -c '%U:%G %a' "$DATA_DIR/cookies")" = "$SERVICE_USER:$SERVICE_GROUP 700" || die "incorrect cookies directory mode"
 test "$(stat -c '%U:%G %a' "$RECORDINGS_DIR")" = "$SERVICE_USER:$MEDIA_GROUP 2750" || die "incorrect recordings directory mode"
-private_socket=$(sed -n 's/^REC_LIVE_PRIVATE_SOCKET=//p' "$CONFIG_DIR/rec-live-tronic.env" | tail -n 1); private_socket=${private_socket:-/run/rec-live-tronic/api.sock}
-socket_attempt=0
-while [ "$socket_attempt" -lt 30 ] && [ ! -S "$private_socket" ]; do sleep 1; socket_attempt=$((socket_attempt + 1)); done
-if [ ! -S "$private_socket" ]; then
+if ! wait_for_private_socket; then
   systemctl --no-pager --full status "$SERVICE-api.service" >&2 || true
   command -v journalctl >/dev/null 2>&1 && journalctl --no-pager -u "$SERVICE-api.service" -n 100 >&2 || true
   die "private API socket was not created: $private_socket"
 fi
+if ! curl --fail --silent --show-error --unix-socket "$private_socket" http://localhost/health >/dev/null; then
+  systemctl --no-pager --full status "$SERVICE-api.service" >&2 || true
+  command -v journalctl >/dev/null 2>&1 && journalctl --no-pager -u "$SERVICE-api.service" -n 100 >&2 || true
+  die "private API socket health check failed: $private_socket"
+fi
+if ! systemctl start "$SERVICE-reconciler.service"; then
+  systemctl --no-pager --full status "$SERVICE-reconciler.service" >&2 || true
+  command -v journalctl >/dev/null 2>&1 && journalctl --no-pager -u "$SERVICE-reconciler.service" -n 100 >&2 || true
+  die "reconciler verification failed"
+fi
+if systemctl is-failed --quiet "$SERVICE-reconciler.service"; then die "reconciler verification failed"; fi
 run_user_bus systemctl --user list-units --all --no-legend >/dev/null
 host=$(sed -n 's/^REC_LIVE_HOST=//p' "$CONFIG_DIR/rec-live-tronic.env" | tail -n 1); host=${host:-0.0.0.0}
 port=$(sed -n 's/^REC_LIVE_PORT=//p' "$CONFIG_DIR/rec-live-tronic.env" | tail -n 1); port=${port:-8787}
