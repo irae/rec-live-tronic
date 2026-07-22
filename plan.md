@@ -457,6 +457,26 @@ Phase 0 is complete only when these acceptance checks pass and the system can
 record reliably without an interactive SSH session, the human user's account,
 sudo, or a root-running application process.
 
+### Next step — shared intranet operator access
+
+**Complexity: Easy.** This is an intentional deployment policy for the trusted
+intranet host, not a public-service security boundary.
+
+1. Treat `rec-media` as the shared operational group. `--media-user irae` and
+   any additional media users receive read/write access to the shared
+   recordings, diagnostics, logs, and cookie files needed to operate the box.
+2. Put recordings, service logs, and other operational artifacts in explicit
+   group-owned trees with inherited group permissions. Do not require `irae`
+   to read the system journal directly or grant broad journal access when a
+   shared log tree is sufficient.
+3. Keep SQLite control/state files and transient systemd internals out of the
+   shared tree unless an explicit diagnostic export is requested. Cookies are
+   allowed in the shared operational tree because this deployment is trusted
+   by its SSH users and the recorder service already requires them.
+4. Acceptance-test access as `irae` and a second `rec-media` member: inspect
+   logs, read/write recording artifacts, inspect cookie files, and confirm
+   that the API/reconciler continue to operate with the shared permissions.
+
 ## Later phases
 
 These are separate larger blocks. Resolve each listed open decision immediately
