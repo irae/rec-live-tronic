@@ -1,0 +1,270 @@
+import type Database from "better-sqlite3";
+import { toRfc3339, toUnixMilliseconds, type UtcInstant } from "../db/instants.js";
+
+export const recordingStatuses = ["scheduled", "recording", "recorded", "cancelled", "failed", "missed"] as const;
+export type RecordingStatus = (typeof recordingStatuses)[number];
+
+export const allowedStatusTransitions: Readonly<Record<RecordingStatus, readonly RecordingStatus[]>> = {
+  scheduled: ["recording", "recorded", "cancelled", "failed", "missed"],
+  recording: ["recording", "recorded", "cancelled", "failed"],
+  recorded: [],
+  cancelled: [],
+  failed: [],
+  missed: [],
+};
+
+export interface Recording {
+  id: string;
+  url: string;
+  title: string;
+  cookieId: string | null;
+  cookiePath: string | null;
+  quality: string;
+  startAt: string;
+  stopAt: string;
+  status: RecordingStatus;
+  unitName: string;
+  tsPath: string;
+  lastStartedBootId: string | null;
+  lastStartedStopAt: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateRecordingInput {
+  id: string;
+  url: string;
+  title: string;
+  cookieId?: string | null;
+  quality: string;
+  startAt: UtcInstant;
+  stopAt: UtcInstant;
+  unitName: string;
+  tsPath: string;
+  now?: UtcInstant;
+}
+
+export interface UpdateScheduledDetails {
+  title?: string;
+  startAt?: UtcInstant;
+  stopAt?: UtcInstant;
+  now?: UtcInstant;
+}
+
+export interface StatusCompareAndSet {
+  id: string;
+  expectedStatus: RecordingStatus;
+  expectedVersion: number;
+  status: RecordingStatus;
+  lastStartedBootId?: string | null;
+  lastStartedStopAt?: UtcInstant | null;
+  now?: UtcInstant;
+}
+
+export type MutationResult<T> = { outcome: "updated"; value: T } | { outcome: "not_found" } | { outcome: "conflict" };
+
+interface RecordingRow {
+  id: string;
+  url: string;
+  title: string;
+  cookie_id: string | null;
+  cookie_path: string | null;
+  quality: string;
+  start_at: number;
+  stop_at: number;
+  status: string;
+  unit_name: string;
+  ts_path: string;
+  last_started_boot_id: string | null;
+  last_started_stop_at: number | null;
+  version: number;
+  created_at: number;
+  updated_at: number;
+}
+
+const selectColumns = `
+  SELECT recordings.id, recordings.url, recordings.title, recordings.cookie_id, cookies.path AS cookie_path,
+         recordings.quality, recordings.start_at, recordings.stop_at, recordings.status, recordings.unit_name,
+         recordings.ts_path, recordings.last_started_boot_id, recordings.last_started_stop_at, recordings.version, recordings.created_at, recordings.updated_at
+  FROM recordings LEFT JOIN cookies ON cookies.id = recordings.cookie_id`;
+
+function assertStatus(status: string): asserts status is RecordingStatus {
+  if (!recordingStatuses.includes(status as RecordingStatus)) throw new TypeError(`Invalid recording status: ${status}`);
+}
+
+function assertVersion(version: number): void {
+  if (!Number.isSafeInteger(version) || version < 0) throw new TypeError("Expected version must be a non-negative integer");
+}
+
+function timestamp(value: UtcInstant | undefined, field: string): number {
+  return toUnixMilliseconds(value ?? new Date(), field);
+}
+
+function mapRecording(row: RecordingRow): Recording {
+  assertStatus(row.status);
+  return {
+    id: row.id,
+    url: row.url,
+    title: row.title,
+    cookieId: row.cookie_id,
+    cookiePath: row.cookie_path,
+    quality: row.quality,
+    startAt: toRfc3339(row.start_at),
+    stopAt: toRfc3339(row.stop_at),
+    status: row.status,
+    unitName: row.unit_name,
+    tsPath: row.ts_path,
+    lastStartedBootId: row.last_started_boot_id,
+    lastStartedStopAt: row.last_started_stop_at === null ? null : toRfc3339(row.last_started_stop_at),
+    version: row.version,
+    createdAt: toRfc3339(row.created_at),
+    updatedAt: toRfc3339(row.updated_at),
+  };
+}
+
+export class RecordingRepository {
+  constructor(private readonly database: Database.Database) {}
+
+  create(input: CreateRecordingInput): Recording {
+    const startAt = timestamp(input.startAt, "startAt");
+    const stopAt = timestamp(input.stopAt, "stopAt");
+    if (startAt >= stopAt) throw new RangeError("startAt must be before stopAt");
+    const now = timestamp(input.now, "now");
+    return this.database.transaction(() => {
+      this.database.prepare(`INSERT INTO recordings
+        (id, url, title, cookie_id, quality, start_at, stop_at, status, unit_name, ts_path, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`)
+        .run(input.id, input.url, input.title, input.cookieId ?? null, input.quality, startAt, stopAt, input.unitName, input.tsPath, now, now);
+      return this.getRequired(input.id);
+    })();
+  }
+
+  getById(id: string): Recording | undefined {
+    const row = this.database.prepare(`${selectColumns} WHERE recordings.id = ?`).get(id) as RecordingRow | undefined;
+    return row === undefined ? undefined : mapRecording(row);
+  }
+
+  list(filters: { status?: RecordingStatus } = {}): Recording[] {
+    if (filters.status !== undefined) assertStatus(filters.status);
+    const rows = filters.status === undefined
+      ? this.database.prepare(`${selectColumns} ORDER BY recordings.created_at DESC`).all()
+      : this.database.prepare(`${selectColumns} WHERE recordings.status = ? ORDER BY recordings.created_at DESC`).all(filters.status);
+    return (rows as RecordingRow[]).map(mapRecording);
+  }
+
+  updateScheduledDetails(id: string, expectedVersion: number, patch: UpdateScheduledDetails): MutationResult<Recording> {
+    assertVersion(expectedVersion);
+    const fields: string[] = [];
+    const values: Array<string | number> = [];
+    let startAt: number | undefined;
+    let stopAt: number | undefined;
+    if (patch.title !== undefined) {
+      fields.push("title = ?");
+      values.push(patch.title);
+    }
+    if (patch.startAt !== undefined) {
+      startAt = timestamp(patch.startAt, "startAt");
+      fields.push("start_at = ?");
+      values.push(startAt);
+    }
+    if (patch.stopAt !== undefined) {
+      stopAt = timestamp(patch.stopAt, "stopAt");
+      fields.push("stop_at = ?");
+      values.push(stopAt);
+    }
+    if (fields.length === 0) throw new TypeError("At least one recording detail is required");
+    return this.database.transaction((): MutationResult<Recording> => {
+      const existing = this.getById(id);
+      if (existing === undefined) return { outcome: "not_found" };
+      if (existing.status === "recording" && (patch.title !== undefined || patch.startAt !== undefined || patch.stopAt === undefined)) {
+        return { outcome: "conflict" };
+      }
+      if (existing.status !== "scheduled" && existing.status !== "recording") return { outcome: "conflict" };
+      const effectiveStart = startAt ?? toUnixMilliseconds(existing.startAt, "stored startAt");
+      const effectiveStop = stopAt ?? toUnixMilliseconds(existing.stopAt, "stored stopAt");
+      if (effectiveStart >= effectiveStop) throw new RangeError("startAt must be before stopAt");
+      const now = timestamp(patch.now, "now");
+      const result = this.database.prepare(`UPDATE recordings SET ${fields.join(", ")}, updated_at = ?, version = version + 1 WHERE id = ? AND version = ? AND status = ?`)
+        .run(...values, now, id, expectedVersion, existing.status);
+      if (result.changes !== 1) return { outcome: "conflict" };
+      return { outcome: "updated", value: this.getRequired(id) };
+    })();
+  }
+
+  cancel(id: string, expectedVersion: number, now?: UtcInstant): MutationResult<Recording> {
+    assertVersion(expectedVersion);
+    return this.database.transaction((): MutationResult<Recording> => {
+      if (this.getById(id) === undefined) return { outcome: "not_found" };
+      const result = this.database.prepare("UPDATE recordings SET status = 'cancelled', updated_at = ?, version = version + 1 WHERE id = ? AND version = ? AND status IN ('scheduled', 'recording')")
+        .run(timestamp(now, "now"), id, expectedVersion);
+      if (result.changes !== 1) return { outcome: "conflict" };
+      return { outcome: "updated", value: this.getRequired(id) };
+    })();
+  }
+
+  compareAndSetStatus(input: StatusCompareAndSet): MutationResult<Recording> {
+    assertStatus(input.expectedStatus);
+    assertStatus(input.status);
+    assertVersion(input.expectedVersion);
+    if (!allowedStatusTransitions[input.expectedStatus].includes(input.status)) {
+      throw new TypeError(`Invalid recording status transition: ${input.expectedStatus} -> ${input.status}`);
+    }
+    return this.database.transaction((): MutationResult<Recording> => {
+      if (this.getById(input.id) === undefined) return { outcome: "not_found" };
+      const values: Array<string | number | null> = [input.status];
+      let launchClauses = "";
+      if (input.lastStartedBootId !== undefined) {
+        launchClauses += ", last_started_boot_id = ?";
+        values.push(input.lastStartedBootId);
+      }
+      if (input.lastStartedStopAt !== undefined) {
+        launchClauses += ", last_started_stop_at = ?";
+        values.push(input.lastStartedStopAt === null ? null : timestamp(input.lastStartedStopAt, "lastStartedStopAt"));
+      }
+      values.push(timestamp(input.now, "now"), input.id, input.expectedStatus, input.expectedVersion);
+      const result = this.database.prepare(`UPDATE recordings SET status = ?${launchClauses}, updated_at = ?, version = version + 1 WHERE id = ? AND status = ? AND version = ?`)
+        .run(...values);
+      if (result.changes !== 1) return { outcome: "conflict" };
+      return { outcome: "updated", value: this.getRequired(input.id) };
+    })();
+  }
+
+  markLaunch(id: string, expectedVersion: number, stopAt: UtcInstant): MutationResult<Recording> {
+    return this.compareAndSetStatus({ id, expectedStatus: "recording", expectedVersion, status: "recording", lastStartedStopAt: stopAt });
+  }
+
+  listDueScheduled(now: UtcInstant): Recording[] {
+    return this.listByWindow("scheduled", now, "start_at <= ? AND stop_at > ?");
+  }
+
+  listActiveRecordings(now: UtcInstant): Recording[] {
+    return this.listByWindow("recording", now, "start_at <= ? AND stop_at > ?");
+  }
+
+  listElapsedScheduled(now: UtcInstant): Recording[] {
+    return this.listByWindow("scheduled", now, "stop_at <= ?");
+  }
+
+  listElapsedRecordings(now: UtcInstant): Recording[] {
+    return this.listByWindow("recording", now, "stop_at <= ?");
+  }
+
+  listCancelled(): Recording[] {
+    return this.list({ status: "cancelled" });
+  }
+
+  private listByWindow(status: RecordingStatus, now: UtcInstant, predicate: string): Recording[] {
+    const value = timestamp(now, "now");
+    const parameterCount = (predicate.match(/\?/g) ?? []).length;
+    const rows = this.database.prepare(`${selectColumns} WHERE recordings.status = ? AND ${predicate} ORDER BY recordings.start_at ASC`)
+      .all(status, ...Array<number>(parameterCount).fill(value));
+    return (rows as RecordingRow[]).map(mapRecording);
+  }
+
+  private getRequired(id: string): Recording {
+    const recording = this.getById(id);
+    if (recording === undefined) throw new Error(`Recording ${id} disappeared during its transaction`);
+    return recording;
+  }
+}
