@@ -478,9 +478,8 @@ debugging on `irae-sheeta` doesn't need a human relaying `su`/journal output.
 ### Phase 0 minor cleanup (non-essential, fix in a batch later)
 
 - Recorder units still run with `UMask=0027`, so new `.ts`/`.log` files come
-  out group-read-only, not group-write, under the 0.7 shared tree.
-- A cookie file uploaded before 0.7 stayed at mode `0600`; not retroactively
-  group-readable.
+  out group-read-only, not group-write, under the 0.7 shared tree. This
+  recurs on every future recording, so it's a code fix, not a one-off.
 
 ### Next step — split dependencies from code for fast deployment
 
