@@ -3,11 +3,12 @@
     <header class="mast">
       <span class="brand">
         <span class="brand-word"><span class="brand-accent">Rec</span>Tronic</span><span class="dot"></span>
-        <small>rec · {{ route.name === 'archive' ? 'archive' : route.name === 'schedule' ? 'schedule' : 'set' }}</small>
+        <small>rec · {{ route.name === 'archive' ? 'archive' : route.name === 'schedule' ? 'schedule' : route.name === 'trash' ? 'trash' : 'set' }}</small>
       </span>
       <nav class="nav">
         <router-link :to="{ name: 'archive' }" :aria-current="route.name === 'archive' ? 'page' : undefined">Archive</router-link>
         <router-link :to="{ name: 'schedule' }" :aria-current="route.name === 'schedule' ? 'page' : undefined">Schedule</router-link>
+        <router-link :to="{ name: 'trash' }" :aria-current="route.name === 'trash' ? 'page' : undefined">Trash</router-link>
       </nav>
     </header>
 

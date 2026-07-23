@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from "vue-router";
 import ArchiveView from "./views/ArchiveView.vue";
 import ScheduleView from "./views/ScheduleView.vue";
 import RecordingDetail from "./views/RecordingDetail.vue";
+import TrashView from "./views/TrashView.vue";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -23,6 +24,12 @@ const router = createRouter({
       name: "detail",
       component: RecordingDetail,
       meta: { title: "RecTronic" },
+    },
+    {
+      path: "/trash",
+      name: "trash",
+      component: TrashView,
+      meta: { title: "Trash - RecTronic" },
     },
   ],
 });
