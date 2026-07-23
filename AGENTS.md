@@ -2,6 +2,10 @@
 
 This document covers how to set up and run the development environment locally. Refer to `README.md` for more detailed information on installation, deployment, and configuration.
 
+## Best practices:
+
+- Never swallow a real error silently — `console.error` it server-side before returning a friendly/generic message to the client.
+
 ## Prerequisites
 
 - Node.js 24.x and npm
