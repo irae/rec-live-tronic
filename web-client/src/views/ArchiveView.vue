@@ -18,6 +18,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
+import { useRouter } from "vue-router";
 import { api } from "../api";
 import RecordingList from "../components/RecordingList.vue";
 
@@ -36,13 +37,7 @@ interface Recording {
   updatedAt: string;
 }
 
-defineProps<{
-  selectedId: string | null;
-}>();
-
-const emit = defineEmits<{
-  selectRecording: [id: string];
-}>();
+const router = useRouter();
 
 const recordings = ref<Recording[]>([]);
 
@@ -56,7 +51,7 @@ onMounted(async () => {
 });
 
 function selectRecording(id: string): void {
-  emit("selectRecording", id);
+  router.push({ name: "detail", params: { id } });
 }
 </script>
 

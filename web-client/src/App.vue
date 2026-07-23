@@ -3,18 +3,16 @@
     <header class="mast">
       <span class="brand">
         Tronic<span class="dot"></span>
-        <small>rec · {{ view === 'archive' ? 'archive' : view === 'schedule' ? 'schedule' : 'set' }}</small>
+        <small>rec · {{ route.name === 'archive' ? 'archive' : route.name === 'schedule' ? 'schedule' : 'set' }}</small>
       </span>
       <nav class="nav">
-        <a href="#" @click.prevent="view = 'archive'" :aria-current="view === 'archive' ? 'page' : undefined">Archive</a>
-        <a href="#" @click.prevent="view = 'schedule'" :aria-current="view === 'schedule' ? 'page' : undefined">Schedule</a>
+        <router-link :to="{ name: 'archive' }" :aria-current="route.name === 'archive' ? 'page' : undefined">Archive</router-link>
+        <router-link :to="{ name: 'schedule' }" :aria-current="route.name === 'schedule' ? 'page' : undefined">Schedule</router-link>
       </nav>
     </header>
 
     <main class="wrap">
-      <ArchiveView :key="refreshKey" v-show="view === 'archive'" @select-recording="selectRecording" :selected-id="selectedId" />
-      <ScheduleView v-show="view === 'schedule'" @select-recording="selectRecording" :selected-id="selectedId" />
-      <RecordingDetail v-show="view === 'detail'" :recording-id="selectedId" @back="goBackToArchive" @deleted="refreshKey++" />
+      <router-view />
     </main>
 
     <footer class="foot">
@@ -25,24 +23,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from "vue";
-import ArchiveView from "./views/ArchiveView.vue";
-import ScheduleView from "./views/ScheduleView.vue";
-import RecordingDetail from "./views/RecordingDetail.vue";
+import { useRoute } from "vue-router";
 
-const view = ref("archive");
-const selectedId = ref<string | null>(null);
-const refreshKey = ref(0);
-
-function selectRecording(id: string): void {
-  selectedId.value = id;
-  view.value = "detail";
-}
-
-function goBackToArchive(): void {
-  selectedId.value = null;
-  view.value = "archive";
-}
+const route = useRoute();
 </script>
 
 <style>

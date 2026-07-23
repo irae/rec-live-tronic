@@ -68,6 +68,7 @@
 
 <script setup lang="ts">
 import { ref, watch, computed } from "vue";
+import { useRoute, useRouter } from "vue-router";
 import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 
@@ -86,15 +87,13 @@ interface Recording {
   updatedAt: string;
 }
 
-interface Props {
-  recordingId: string | null;
-}
+const route = useRoute();
+const router = useRouter();
 
-const props = defineProps<Props>();
-const emit = defineEmits<{
-  back: [];
-  deleted: [];
-}>();
+const recordingId = computed(() => {
+  const id = route.params.id;
+  return typeof id === "string" ? id : null;
+});
 
 const recording = ref<Recording | null>(null);
 const copyDone = ref(false);
@@ -102,8 +101,8 @@ const showDeleteConfirm = ref(false);
 const deleteError = ref<string | null>(null);
 
 const streamUrl = computed(() => {
-  if (!props.recordingId) return "";
-  return `${window.location.origin}/recordings/${props.recordingId}/file`;
+  if (!recordingId.value) return "";
+  return `${window.location.origin}/recordings/${recordingId.value}/file`;
 });
 
 const isIos = computed(() => {
@@ -123,12 +122,13 @@ const vlcUrl = computed(() => {
 });
 
 watch(
-  () => props.recordingId,
+  () => route.params.id,
   async (id) => {
     recording.value = null;
-    if (!id) return;
+    if (typeof id !== "string") return;
     try {
       recording.value = await api.getRecording(id);
+      document.title = `Tronic · ${recording.value.title}`;
     } catch (error) {
       console.error("Failed to load recording:", error);
     }
@@ -137,7 +137,7 @@ watch(
 );
 
 function goBack(): void {
-  emit("back");
+  router.push({ name: "archive" });
 }
 
 function legacyCopy(text: string): boolean {
@@ -177,12 +177,11 @@ function askDelete(): void {
 }
 
 async function confirmDelete(): Promise<void> {
-  if (!props.recordingId) return;
+  if (!recordingId.value) return;
   try {
-    await api.deleteRecordingFile(props.recordingId);
+    await api.deleteRecordingFile(recordingId.value);
     showDeleteConfirm.value = false;
-    emit("deleted");
-    emit("back");
+    router.push({ name: "archive" });
   } catch (error) {
     console.error("Failed to delete recording:", error);
     showDeleteConfirm.value = false;

@@ -152,14 +152,6 @@ interface Recording {
   updatedAt: string;
 }
 
-defineProps<{
-  selectedId: string | null;
-}>();
-
-const emit = defineEmits<{
-  selectRecording: [id: string];
-}>();
-
 const recordings = ref<Recording[]>([]);
 const error = ref<string | null>(null);
 const editingId = ref<string | null>(null);

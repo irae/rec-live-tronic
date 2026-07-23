@@ -76,6 +76,11 @@ export function createApp(deps: AppDependencies): express.Express {
     const __dirname = dirname(fileURLToPath(import.meta.url));
     const publicPath = join(__dirname, "..", "dist", "public");
     app.use(express.static(publicPath));
+    app.get("/*splat", (_request, response, next) => {
+      response.sendFile(join(publicPath, "index.html"), (error) => {
+        if (error) next(error);
+      });
+    });
   }
 
   app.use((_request, _response, next) => next(new AppError("NOT_FOUND", 404, "Route not found")));
