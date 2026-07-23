@@ -72,7 +72,7 @@ body {
 
 a { color: inherit; text-decoration: none; }
 
-.wrap { max-width: 1160px; margin: 0 auto; padding: 0 var(--edge) 80px; }
+.wrap { max-width: 1240px; margin: 0 auto; padding: 0 var(--edge) 80px; }
 
 .mast {
   display: flex; align-items: center; justify-content: space-between;

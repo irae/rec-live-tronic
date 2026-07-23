@@ -46,25 +46,36 @@
               </div>
             </div>
 
-            <div class="field row2">
-              <div>
-                <label for="start"><span class="num">04</span> · Start</label>
-                <input
-                  class="input"
-                  id="start"
-                  type="datetime-local"
-                  v-model="form.start"
-                />
-              </div>
-              <div>
-                <label for="stop"><span class="num">05</span> · Stop</label>
-                <input
-                  class="input"
-                  id="stop"
-                  type="datetime-local"
-                  v-model="form.stop"
-                />
-              </div>
+            <div class="field">
+              <label for="start"><span class="num">04</span> · Start</label>
+              <input
+                class="input"
+                id="start"
+                type="datetime-local"
+                v-model="form.start"
+              />
+            </div>
+
+            <div class="field">
+              <label for="duration"><span class="num">05</span> · Duration <small class="hint">h:mm</small></label>
+              <input
+                class="input mono"
+                id="duration"
+                type="text"
+                inputmode="numeric"
+                placeholder="1:30"
+                v-model="form.duration"
+              />
+            </div>
+
+            <div class="field">
+              <label for="stop"><span class="num">06</span> · Stop</label>
+              <input
+                class="input"
+                id="stop"
+                type="datetime-local"
+                v-model="form.stop"
+              />
             </div>
 
             <div class="field">
@@ -134,7 +145,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, onUnmounted, computed } from "vue";
+import { ref, reactive, watch, onMounted, onUnmounted, computed } from "vue";
 import { api } from "../api";
 
 interface Recording {
@@ -166,8 +177,68 @@ const form = reactive({
   title: "",
   quality: "1080p",
   start: "",
+  duration: "",
   stop: "",
 });
+
+// Start is the anchor field. Duration and Stop stay in sync with each other
+// (Stop = Start + Duration) without ever rewriting Start.
+let syncingTime = false;
+
+function parseDurationMinutes(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const hm = trimmed.match(/^(\d+):([0-5]?\d)$/);
+  if (hm) {
+    return parseInt(hm[1], 10) * 60 + parseInt(hm[2], 10);
+  }
+  const asMinutes = Number(trimmed);
+  return Number.isFinite(asMinutes) && asMinutes >= 0 ? Math.round(asMinutes) : null;
+}
+
+function formatDurationMinutes(totalMinutes: number): string {
+  const clamped = Math.max(0, Math.round(totalMinutes));
+  const hours = Math.floor(clamped / 60);
+  const mins = clamped % 60;
+  return `${hours}:${String(mins).padStart(2, "0")}`;
+}
+
+watch(
+  () => form.duration,
+  (value) => {
+    if (syncingTime || !form.start) return;
+    const minutes = parseDurationMinutes(value);
+    if (minutes === null) return;
+    syncingTime = true;
+    const stopDate = new Date(new Date(form.start).getTime() + minutes * 60_000);
+    form.stop = toLocalDatetimeInputValue(stopDate.toISOString());
+    syncingTime = false;
+  }
+);
+
+watch(
+  () => form.stop,
+  (value) => {
+    if (syncingTime || !form.start || !value) return;
+    const diffMinutes = (new Date(value).getTime() - new Date(form.start).getTime()) / 60_000;
+    syncingTime = true;
+    form.duration = diffMinutes >= 0 ? formatDurationMinutes(diffMinutes) : "";
+    syncingTime = false;
+  }
+);
+
+watch(
+  () => form.start,
+  (value, oldValue) => {
+    if (syncingTime || !value || !oldValue) return;
+    const minutes = parseDurationMinutes(form.duration);
+    if (minutes === null) return;
+    syncingTime = true;
+    const stopDate = new Date(new Date(value).getTime() + minutes * 60_000);
+    form.stop = toLocalDatetimeInputValue(stopDate.toISOString());
+    syncingTime = false;
+  }
+);
 
 const displayedRecordings = computed(() => {
   return recordings.value.filter(
@@ -220,6 +291,7 @@ async function handleAddRecording(): Promise<void> {
     form.title = "";
     form.quality = "1080p";
     form.start = "";
+    form.duration = "";
     form.stop = "";
   } catch (err) {
     console.error("Failed to create recording:", err);
@@ -388,10 +460,15 @@ function formatTimeInfo(rec: Recording): string {
   align-items: start;
 }
 
+.booking {
+  min-width: 0;
+}
+
 .card {
   background: var(--paper);
   border: 2.5px solid var(--line);
   box-shadow: var(--sh);
+  min-width: 0;
 }
 
 .card__head {
@@ -442,6 +519,16 @@ function formatTimeInfo(rec: Recording): string {
   color: var(--fluoro);
 }
 
+.field .hint {
+  font-family: var(--mono);
+  font-weight: 400;
+  font-size: 9.5px;
+  letter-spacing: .1em;
+  text-transform: none;
+  color: var(--ink-soft);
+  opacity: .7;
+}
+
 .input {
   width: 100%;
   font-family: var(--ui);
@@ -463,12 +550,6 @@ function formatTimeInfo(rec: Recording): string {
   outline: none;
   background: var(--paper);
   box-shadow: 3px 3px 0 var(--fluoro);
-}
-
-.row2 {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
 }
 
 .quality {
@@ -775,7 +856,7 @@ function formatTimeInfo(rec: Recording): string {
 
 @media (min-width: 900px) {
   .split {
-    grid-template-columns: 400px minmax(0, 1fr);
+    grid-template-columns: 420px minmax(0, 1fr);
     gap: 34px;
   }
 
