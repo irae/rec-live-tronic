@@ -470,7 +470,7 @@ t.test("rejects deleting a recording that is not finished");
 t.test("leaves no dangling row and no orphaned file after a delete");
 ```
 
-**Implementation sequence.** The design-prototype gate (step 2) is a pause point
+**Implementation sequence.** The design-prototype gate (step 3) is a pause point
 *within* implementation, not the finish line — real building continues past it.
 
 1. Scaffold the Vite + Vue project under `web-client/` (config, `index.html`,
@@ -478,7 +478,13 @@ t.test("leaves no dangling row and no orphaned file after a delete");
    `dev:client` scripts and `express.static("dist/public")` serving in
    `src/app.ts`, and confirm the shell loads and `api.ts` renders live
    `GET /recordings` data with throwaway markup.
-2. **Design-prototype gate.** Produce **three competing static-HTML visual
+2. Commit a project-root `AGENTS.md` documenting how any agent runs and debugs
+   the codebase locally, so future sessions don't rediscover it from source. It
+   covers the dev commands (`npm run dev:client`, `npm run build`, `npm test`),
+   how to hit the API directly with curl for manual checks, and the relevant
+   local ports/URLs (Vite dev server vs. the Express API). Keep it short and
+   command-first; the actual file is written now during execution.
+3. **Design-prototype gate.** Produce **three competing static-HTML visual
    themes** — full look-and-feel mockups with dummy data, no backend wiring — in
    the git-ignored `design-prototypes/` folder for the owner to open in a browser
    and pick one. **Each of the three prototypes must be built by an agent that
@@ -488,25 +494,25 @@ t.test("leaves no dangling row and no orphaned file after a delete");
    instruct each to load `frontend-design` before building). **Pause here for the
    owner's pick;** the winning theme's HTML/CSS becomes the styling basis and the
    other two are discarded.
-3. Port the chosen theme's markup and CSS into the real Vue SFCs — its layout and
+4. Port the chosen theme's markup and CSS into the real Vue SFCs — its layout and
    styles become the `<template>`/`<style>` of `App.vue` and the three view
    components, mobile-first with the desktop breakpoint (list + detail side by
    side past it). The static prototype is translated into components here; it is
    not shipped as-is.
-4. Implement `ArchiveView.vue` and `ScheduleView.vue` against their endpoints per
+5. Implement `ArchiveView.vue` and `ScheduleView.vue` against their endpoints per
    the mapping above (single `GET /recordings` fetch + client-side partition;
    create/edit/cancel; stop-early and start-now as `PATCH`es).
-5. Implement `RecordingDetail.vue`: native `<video>` player, always-present
+6. Implement `RecordingDetail.vue`: native `<video>` player, always-present
    copy-URL button, optional iOS-only "Open in VLC" link, and the delete control
    wired to `DELETE /recordings/:id/file`.
-6. Implement the delete backend (`RecordingRepository.delete`,
+7. Implement the delete backend (`RecordingRepository.delete`,
    `RecorderService.deleteRecording`, route handler) and its functional tests.
-7. **Playwright smoke pass.** Deliberately light: Playwright's built-in iPhone
+8. **Playwright smoke pass.** Deliberately light: Playwright's built-in iPhone
    device profile (e.g. `devices['iPhone 13']`) over the core flows (list loads,
    schedule create, open detail, player present, copy-URL works, delete works),
    plus a desktop-viewport pass. Smoke-level device emulation, **not** exhaustive
    cross-device/browser mobile QA.
-8. Verify on `irae-sheeta` against real recordings and confirm curl parity — no
+9. Verify on `irae-sheeta` against real recordings and confirm curl parity — no
    operation requires a browser-only path.
 
 **Acceptance criteria — what "Phase 2 done" looks like.**
