@@ -126,7 +126,7 @@
                 </span>
                 <span v-else class="state state--sched">Scheduled</span>
               </div>
-              <div v-if="rec.status === 'recording'" class="prog"><i></i></div>
+              <div v-if="rec.status === 'recording'" class="prog"><i :style="{ right: (100 - recordingProgressPercent(rec)) + '%' }"></i></div>
               <div class="slot__meta mono">{{ formatTimeInfo(rec) }}</div>
               <div class="actions">
                 <button v-if="rec.status === 'recording'" class="tbtn tbtn--stop" @click.prevent="handleStopEarly(rec.id)">■ Stop early</button>
@@ -388,6 +388,14 @@ async function saveEdit(id: string): Promise<void> {
 
 function cancelEdit(): void {
   editingId.value = null;
+}
+
+function recordingProgressPercent(rec: Recording): number {
+  const start = new Date(rec.startAt).getTime();
+  const stop = new Date(rec.stopAt).getTime();
+  const now = Date.now();
+  if (stop <= start) return 0;
+  return Math.min(100, Math.max(0, ((now - start) / (stop - start)) * 100));
 }
 
 function formatTimeInfo(rec: Recording): string {
@@ -743,7 +751,6 @@ function formatTimeInfo(rec: Recording): string {
 .prog > i {
   position: absolute;
   inset: 0;
-  right: 38%;
   background: repeating-linear-gradient(45deg, var(--fluoro) 0 8px, #ff6a53 8px 16px);
   animation: slide 1s linear infinite;
 }
