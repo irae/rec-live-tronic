@@ -1,7 +1,9 @@
 # YouTube Live Recorder — Architecture Spec
 
-Architecture specification. **Architecture only — do not implement yet.**
-Build in phase order. Phase 0 must be usable via `curl` and reliably record today; everything else iterates on top.
+Architecture specification, describing the current decided state. Phases 0-2
+are implemented and deployed; this document reflects that reality, not the
+history of how it was reached (see git log for that). Extend it before
+implementing anything in Phase 3 or later.
 
 ## Core durable traits
 
@@ -20,6 +22,13 @@ list is the pointer, not the depth.
 - **No request data ever becomes a PID, shell word, path, or unit identifier.**
   The live unit is derived from the durable recording ID; the app never stores
   or controls a PID.
+- **The API's systemd unit runs under `ProtectSystem=strict`**, which makes the
+  whole filesystem read-only except paths explicitly listed in its
+  `ReadWritePaths=`. Reads are unaffected, but any new API-side filesystem
+  *write* needs its target directory added there, or it fails with `EROFS` at
+  runtime — silently, since neither the build nor the local test suite
+  exercises this sandboxing. Check `systemd/rec-live-tronic-api.service`
+  before adding any new write path.
 
 ## Goal & principles
 
@@ -39,8 +48,8 @@ list is the pointer, not the depth.
 - **HTTP API (Node + Express)** — the only writer to SQLite in normal operation. curl-first.
 - **Reconciler daemon** — thin loop (run as a systemd timer/service, tick every 30–60s). Holds no in-memory state worth losing. Diffs SQLite ⇄ live `rec-*` systemd units and acts.
 - **streamlink** — the recorder binary. Writes `.ts` (append-safe; killable mid-write and still playable).
-- **ffmpeg -c copy** — remux `.ts` → final container. *(Phase 3)*
-- **Web UI** — schedule/history/candidates/files. *(Phase 4)*
+- **ffmpeg -c copy** — remux/convert `.ts` → final container. *(Phase 4, deprioritized)*
+- **Web UI** — a Vue 3 SPA (Vite build, `vue-router` client-side routing at `/`, `/schedule`, `/watch/:id` — deliberately not `/recordings/:id`, which the real JSON API already owns), served as static files by the same Express API (`express.static` plus an SPA-fallback route so deep-linking/refreshing a client route works). Covers schedule (create/edit/cancel/start-now/stop-early), archive (finished recordings), and per-recording detail (playback, copy-URL, delete). Playback of finished recordings uses `mpegts.js` (client-side MSE-based transmuxing): no current major browser (Chrome, Edge, Safari, Firefox) natively plays a standalone `.ts` file via a plain `<video src>` (see `docs/browser-playback-research.md`). *(Phase 2, done.)*
 
 ## Trusted intranet access (next deployment block)
 
@@ -78,7 +87,7 @@ Reconciler tick responsibilities:
 4. `recording` & unit gone early (crash/stream ended) → mark `recorded` (file exists) or `failed`.
 5. `cancelled` with a live unit → `systemctl stop`, mark `cancelled`.
 6. Reboot recovery (rule 1 covers it) / `missed` when window fully elapsed with no file or launch evidence.
-7. *(Phase 3)* `recorded` & not yet muxed → enqueue remux.
+7. *(Phase 4)* `recorded` & not yet muxed → enqueue remux.
 
 ## Data model (fields, not schema)
 
@@ -93,11 +102,11 @@ Recordings: `POST /recordings` · `GET /recordings` (filter by status) · `GET /
 
 Cookies: `POST /cookies` (multipart upload, `name` + file) · `GET /cookies` · `DELETE /cookies/:id`.
 
-Candidates: `POST /candidates` (bulk import a broadcast schedule) · `GET /candidates` · `POST /candidates/:id/schedule` (promote → recording, optional overrides) · `DELETE /candidates/:id`.
+Candidates *(not yet built, deferred — see plan.md's lowest-priority section)*: `POST /candidates` (bulk import a broadcast schedule) · `GET /candidates` · `POST /candidates/:id/schedule` (promote → recording, optional overrides) · `DELETE /candidates/:id`.
 
-Files: `GET /recordings/:id/file` — a static Express route that streams a **finished** (`recorded`/`muxed`) file with HTTP range support, giving a stable per-file network URL VLC can open (Phase 1; see plan.md). Serving a still-recording/growing file is a non-goal. `DELETE /recordings/:id/file` lands with the file lifecycle *(Phase 3)*.
+Files: `GET /recordings/:id/file` — a static Express route that streams a **finished** (`recorded`/`muxed`) file with HTTP range support, giving a stable per-file network URL VLC can open and the web client's `mpegts.js` player range-fetch against. Serving a still-recording/growing file is a non-goal. `DELETE /recordings/:id/file` performs a full purge (unlinks the file, tolerating already-missing, and deletes the SQLite row — despite the `/file` in the path, it removes the whole record); gated to `recorded` status only (`409` otherwise — a scheduled/recording row goes through the existing soft-cancel route instead), and a `500` (unlink failure other than already-missing) leaves the row intact so the delete is safely retryable.
 
-Ops: `GET /health` · `GET /recordings/:id/log` (tail streamlink output).
+Ops: `GET /health`. *(`GET /recordings/:id/log`, to tail streamlink output over HTTP, is not yet built — the per-recording log file is directly readable over SSH today, see AGENTS.md.)*
 
 ## Recorder invocation notes
 
@@ -107,24 +116,27 @@ Ops: `GET /health` · `GET /recordings/:id/log` (tail streamlink output).
 
 ## Build phases
 
-- **Phase 0 (MVP, done):** SQLite + Express API + reconciler + streamlink. Schedule/list/cancel recordings, extend/shorten `stop_at` live, and upload cookies via curl. Records `.ts` reliably. No UI, no transcode.
-- **Phase 1:** VLC-openable static file route (`GET /recordings/:id/file`, finished files only) + split the release into `web`/`reconciler`/`deps` packages for independent, faster deploys.
-- **Phase 2:** candidates (import schedule → promote) and log tailing.
-- **Phase 3:** transcode/remux worker `.ts → final container` (as `mux-<id>` systemd units, concurrency-capped) + file delete.
-- **Phase 4:** web UI (schedule form, history, candidate inbox, file list + network URLs).
-- **Phase 5 (deferred):** auth middleware, retention/cleanup policy.
+- **Phase 0 (done):** SQLite + Express API + reconciler + streamlink. Schedule/list/cancel recordings, extend/shorten `stop_at` live, and upload cookies via curl. Records `.ts` reliably. No UI, no transcode.
+- **Phase 1 (done):** VLC-openable static file route (`GET /recordings/:id/file`, finished files only) + split the release into `web`/`reconciler`/`deps` packages for independent, faster deploys.
+- **Phase 2 (done):** the web client (Vue 3 SPA, `mpegts.js` playback) plus the hard delete route (`DELETE /recordings/:id/file`).
+- **Phase 3:** file operations — non-destructive derived-recording trim/split over already-finished files (independent rows, deleted the same way as any other recording).
+- **Phase 4 (deprioritized):** transcode/remux to a final container (`mkv` vs `mp4` — open) + download.
+- **Deferred, unordered** (see plan.md's lowest-priority section for the full list): candidates (bulk schedule import → promote), log tailing over HTTP, auth middleware, retention/cleanup policy, client-captured thumbnails, Firefox playback.
 
 ## Open decisions — resolve before the relevant phase (do NOT invent)
 
-- ⚠ **Final container (Phase 3):** `mkv` vs `mp4` (remux `-c copy`; if audio/video codecs aren't mp4-safe, mkv is the safe default).
-- ⚠ **Transcode trigger (Phase 3):** reconciler-driven vs. a systemd `.path` unit watching the output dir.
-- ⚠ **Candidate import format (Phase 2):** JSON array vs. CSV vs. ICS. Default assumption: JSON for MVP.
-- ⚠ **Retention (Phase 5):** manual delete only, or age/size-based cleanup.
+- ⚠ **Final container (Phase 4):** `mkv` vs `mp4` (remux `-c copy`; if audio/video codecs aren't mp4-safe, mkv is the safe default).
+- ⚠ **Transcode trigger (Phase 4):** reconciler-driven vs. a systemd `.path` unit watching the output dir.
+- ⚠ **Candidate import format (deferred):** JSON array vs. CSV vs. ICS. Default assumption: JSON for MVP.
+- ⚠ **Retention (deferred):** manual delete only, or age/size-based cleanup.
 
-*Resolved: file sharing / network URL — a static Express file route (`GET /recordings/:id/file`), finished files only, built in Phase 1 (see plan.md). No Jellyfin/nginx/Samba.*
+*Resolved: file sharing / network URL is a static Express file route (`GET /recordings/:id/file`), finished files only. No Jellyfin/nginx/Samba.*
 
-*Resolved: mpegts.js seekable duration for finished `.ts` recordings — not pursued further, dropped as best-effort. Traced both of the library's duration-override paths (`overridedDuration`/the `duration` MediaDataSource field, and the internal `_updateMediaSourceDuration` mechanism) and confirmed neither applies to MPEG-TS: the former is implemented only by mpegts.js's FLV demuxer, the latter only fires for a Safari `audio/mpeg` edge case. The library exposes no public access to the underlying `MediaSource` object either, so there's no supported way to force an accurate seek range up front without patching the library. Decision: keep `lazyLoad: true` (required for scalability against multi-GB recordings) and accept that duration/seek-to-end only becomes fully accurate as more of the file is demuxed — not forced.*
+*Resolved: mpegts.js cannot be given an accurate seek-to-end duration for MPEG-TS — its `duration` MediaDataSource field (`overridedDuration`) is implemented only by its FLV demuxer, and its internal `_updateMediaSourceDuration` path only fires for a Safari `audio/mpeg` edge case; it exposes no public access to the underlying `MediaSource` object either. `lazyLoad: true` stays on (required for scalability against multi-GB recordings); duration/seek-to-end becomes accurate progressively as more of the file is demuxed, not forced up front.*
 
-## Non-goals (MVP)
+## Non-goals (Phase 0 MVP scope)
 
-Auth, transcoding, retention automation, and any UI. Reliability of `.ts` capture comes first; everything else layers on without touching the record path.
+Auth, transcoding, retention automation, and any UI were deliberately out of
+scope for Phase 0 — reliability of `.ts` capture came first. UI (Phase 2) and
+delete (Phase 2) are since built; transcoding, auth, and retention remain
+unbuilt (Phase 4 / deferred, above).
