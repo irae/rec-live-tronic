@@ -133,10 +133,17 @@ function destroyPlayer(): void {
 
 function setupPlayer(): void {
   destroyPlayer();
-  if (!useMpegts || !videoEl.value || !streamUrl.value) return;
+  if (!useMpegts || !videoEl.value || !streamUrl.value || !recording.value) return;
+  // mpegts.js's `duration` MediaDataSource field (overridedDuration) is only
+  // implemented by its FLV demuxer, not the MPEG-TS one we use here -- it's a
+  // silent no-op for `type: "mpegts"`. The real fix: mpegts.js accumulates
+  // total duration from demuxed segments as it loads, but `lazyLoad` (default
+  // true) only keeps ~3 min of data ahead, so a finished file's tail stays
+  // un-demuxed (and un-seekable) until played that far. These are finished,
+  // fixed-size recordings, not live tails, so load the whole thing up front.
   player = mpegts.createPlayer(
     { type: "mpegts", url: streamUrl.value, isLive: false },
-    {},
+    { lazyLoad: false },
   );
   player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
     console.error("mpegts.js playback error:", type, detail);
@@ -332,6 +339,7 @@ function formatStatus(status: string): string {
   inset: 0;
   background-image: radial-gradient(rgba(255,255,255,.10) 0.7px, transparent 0.8px);
   background-size: 6px 6px;
+  pointer-events: none;
 }
 
 .player .frame {
