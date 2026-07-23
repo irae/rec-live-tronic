@@ -203,6 +203,7 @@ export class RecorderService {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         // File already missing, continue to delete row
       } else {
+        console.error(`Failed to unlink recording file for ${id} (${recording.tsPath}):`, error);
         throw new AppError("FILE_DELETE_ERROR", 500, "Failed to delete recording file");
       }
     }

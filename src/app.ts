@@ -109,7 +109,13 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService): void 
     try {
       const { status, tsPath } = recorder.getRecordingFile(request.params.id);
       if (status !== "recorded") throw new AppError("STATUS_CONFLICT", 409, "Recording file is not ready to stream");
-      response.sendFile(tsPath, { headers: { "Content-Type": "video/mp2t" } }, (error) => {
+      // Without an explicit root, send's dotfile check inspects every segment
+      // of the full absolute path (not just the part under recordingsDir), so
+      // a dot-segment ancestor directory -- e.g. dev/test's .local/... -- gets
+      // treated as a dotfile and 404s internally. Production's recordingsDir
+      // (/srv/rec-live-tronic/recordings) has no dot segments, but allow them
+      // explicitly since this path is server-constructed, not user input.
+      response.sendFile(tsPath, { headers: { "Content-Type": "video/mp2t" }, dotfiles: "allow" }, (error) => {
         if (error) next(error);
       });
     } catch (error) { next(error); }
