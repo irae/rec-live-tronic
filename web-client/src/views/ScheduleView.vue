@@ -121,7 +121,10 @@
                   <div class="slot__title">{{ rec.title }}</div>
                   <div class="slot__meta">{{ rec.stage || "Stage" }} · {{ rec.quality || "n/a" }}<template v-if="rec.url"> · <a :href="rec.url" target="_blank" rel="noopener noreferrer" class="slot__watch">Watch live ↗</a></template></div>
                 </div>
-                <span v-if="rec.status === 'recording'" class="state state--live">
+                <span v-if="stoppingIds.has(rec.id)" class="state state--stopping">
+                  <span class="blip"></span>Stopping…
+                </span>
+                <span v-else-if="rec.status === 'recording'" class="state state--live">
                   <span class="blip"></span>Rec
                 </span>
                 <span v-else class="state state--sched">Scheduled</span>
@@ -129,7 +132,7 @@
               <div v-if="rec.status === 'recording'" class="prog"><i :style="{ right: (100 - recordingProgressPercent(rec)) + '%' }"></i></div>
               <div class="slot__meta mono">{{ formatTimeInfo(rec) }}</div>
               <div class="actions">
-                <button v-if="rec.status === 'recording'" class="tbtn tbtn--stop" @click.prevent="handleStopEarly(rec.id)">■ Stop early</button>
+                <button v-if="rec.status === 'recording' && !stoppingIds.has(rec.id)" class="tbtn tbtn--stop" @click.prevent="handleStopEarly(rec.id)">■ Stop early</button>
                 <button v-else class="tbtn tbtn--go" @click.prevent="handleStartNow(rec.id)">▶ Start now</button>
                 <button v-if="rec.status === 'scheduled'" class="tbtn" @click.prevent="startEdit(rec)">Edit</button>
                 <button v-if="rec.status === 'scheduled'" class="tbtn" @click.prevent="handleCancel(rec.id)">Cancel</button>
@@ -166,6 +169,7 @@ interface Recording {
 const recordings = ref<Recording[]>([]);
 const error = ref<string | null>(null);
 const editingId = ref<string | null>(null);
+const stoppingIds = ref<Set<string>>(new Set());
 const editForm = reactive({
   title: "",
   start: "",
@@ -251,6 +255,12 @@ async function fetchRecordings(): Promise<void> {
     error.value = null;
     const all = await api.listRecordings();
     recordings.value = all;
+    for (const id of stoppingIds.value) {
+      const rec = all.find((r) => r.id === id);
+      if (!rec || rec.status !== "recording") {
+        stoppingIds.value.delete(id);
+      }
+    }
   } catch (err) {
     console.error("Failed to load schedule:", err);
     error.value =
@@ -330,6 +340,7 @@ async function handleStartNow(id: string): Promise<void> {
 }
 
 async function handleStopEarly(id: string): Promise<void> {
+  stoppingIds.value.add(id);
   try {
     error.value = null;
     const result = await api.patchRecording(id, {
@@ -343,6 +354,7 @@ async function handleStopEarly(id: string): Promise<void> {
     console.error("Failed to stop recording:", err);
     error.value =
       err instanceof Error ? err.message : "Failed to stop recording";
+    stoppingIds.value.delete(id);
   }
 }
 
@@ -742,12 +754,22 @@ function formatTimeInfo(rec: Recording): string {
   color: var(--violet);
 }
 
+.state--stopping {
+  border: 2px solid var(--fluoro);
+  background: var(--paper-2);
+  color: var(--fluoro);
+}
+
 .state .blip {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: #fff;
   animation: pulse 1.3s infinite;
+}
+
+.state--stopping .blip {
+  background: var(--fluoro);
 }
 
 .prog {
