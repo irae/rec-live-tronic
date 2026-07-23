@@ -46,8 +46,8 @@
           <button class="copy" @click="copyUrl" :class="{ done: copyDone }">{{ copyDone ? "Copied ✓" : "Copy" }}</button>
         </div>
         <div class="vlc-line">
-          <a v-if="isIos" class="vlc" :href="vlcUrl">Open in VLC ↗</a>
-          <span v-if="isIos" class="vlc-note"> — optional, iOS only, best-effort</span>
+          <a v-if="isIos || isMac" class="vlc" :href="vlcUrl">Open in VLC ↗</a>
+          <span v-if="isIos || isMac" class="vlc-note"> — optional, best-effort, may not always work without VLC's URL handler registered</span>
         </div>
 
         <div class="danger">
@@ -154,7 +154,15 @@ const isIos = computed(() => {
   return /iPad|iPhone|iPod/.test(navigator.userAgent);
 });
 
+// iPadOS 13+ Safari reports its userAgent as a plain Mac, so exclude the
+// touch-capable "MacIntel" case (real Macs aren't multi-touch) to avoid
+// mistaking an iPad for a desktop Mac.
+const isMac = computed(() => {
+  return !isIos.value && /Macintosh|Mac OS X/.test(navigator.userAgent) && navigator.maxTouchPoints <= 1;
+});
+
 const vlcUrl = computed(() => {
+  if (isMac.value) return `vlc://${streamUrl.value}`;
   return `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(streamUrl.value)}`;
 });
 
