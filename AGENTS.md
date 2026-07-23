@@ -10,6 +10,7 @@ This document covers how to set up and run the development environment locally. 
 - When something fails with no obvious cause, trace the real root cause by reading actual source/config (application code, systemd unit files, library source) before guessing or asking for logs that may not even be accessible.
 - Don't remove a feature/link just because it doesn't work out of the box for the current tester — confirm with the owner first; they may complete missing setup themselves rather than want it gone.
 - Keep architecture/spec docs to current decided state only — historical rationale (what changed, when, why) belongs in git commit history, not living spec docs.
+- Never end a turn or hand back to the owner with uncommitted work — commit as you go, in small blocks, rather than piling everything into one commit at the end. Only commit what you actually changed; leave any unrelated pre-existing unstaged/untracked files alone.
 
 ## Prerequisites
 
