@@ -66,7 +66,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from "vue";
+import { ref, watch, computed } from "vue";
 import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 
@@ -112,14 +112,19 @@ const vlcUrl = computed(() => {
   return `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(streamUrl.value)}`;
 });
 
-onMounted(async () => {
-  if (!props.recordingId) return;
-  try {
-    recording.value = await api.getRecording(props.recordingId);
-  } catch (error) {
-    console.error("Failed to load recording:", error);
-  }
-});
+watch(
+  () => props.recordingId,
+  async (id) => {
+    recording.value = null;
+    if (!id) return;
+    try {
+      recording.value = await api.getRecording(id);
+    } catch (error) {
+      console.error("Failed to load recording:", error);
+    }
+  },
+  { immediate: true },
+);
 
 function goBack(): void {
   emit("back");
