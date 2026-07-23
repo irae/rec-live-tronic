@@ -65,6 +65,7 @@
                 inputmode="numeric"
                 placeholder="1:30"
                 v-model="form.duration"
+                @blur="handleDurationBlur"
               />
             </div>
 
@@ -207,18 +208,18 @@ function formatDurationMinutes(totalMinutes: number): string {
   return `${hours}:${String(mins).padStart(2, "0")}`;
 }
 
-watch(
-  () => form.duration,
-  (value) => {
-    if (syncingTime || !form.start) return;
-    const minutes = parseDurationMinutes(value);
-    if (minutes === null) return;
-    syncingTime = true;
-    const stopDate = new Date(new Date(form.start).getTime() + minutes * 60_000);
-    form.stop = toLocalDatetimeInputValue(stopDate.toISOString());
-    syncingTime = false;
-  }
-);
+// Let the user type freely (e.g. "90") -- only parse/reformat (to "H:MM")
+// and recompute Stop once they leave the field, not on every keystroke.
+function handleDurationBlur(): void {
+  if (syncingTime || !form.start) return;
+  const minutes = parseDurationMinutes(form.duration);
+  if (minutes === null) return;
+  syncingTime = true;
+  form.duration = formatDurationMinutes(minutes);
+  const stopDate = new Date(new Date(form.start).getTime() + minutes * 60_000);
+  form.stop = toLocalDatetimeInputValue(stopDate.toISOString());
+  syncingTime = false;
+}
 
 watch(
   () => form.stop,
@@ -280,13 +281,17 @@ onMounted(async () => {
 async function handleAddRecording(): Promise<void> {
   try {
     error.value = null;
-    if (!form.url || !form.title || !form.start || !form.stop) {
-      error.value = "All fields are required";
+    if (!form.url || !form.title) {
+      error.value = "Stream URL and title are required";
       return;
     }
 
-    const startDate = new Date(form.start);
-    const stopDate = new Date(form.stop);
+    // Reasonable defaults instead of demanding every field: no start means
+    // now, no stop/duration means 60 minutes from start.
+    const startDate = form.start ? new Date(form.start) : new Date();
+    const stopDate = form.stop
+      ? new Date(form.stop)
+      : new Date(startDate.getTime() + (parseDurationMinutes(form.duration) ?? 60) * 60_000);
 
     const newRecording = await api.createRecording({
       url: form.url,
