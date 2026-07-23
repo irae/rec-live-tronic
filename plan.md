@@ -598,38 +598,216 @@ keeps the "fed by existing polling" property.
 
 ### Phase 4 — misc actions
 
-**Complexity: Medium.** Scheduling and quality-picker quality-of-life plus a
-raw-download affordance. Restates the owner's backlog; each item is small on its
-own. Written at later-phase summary depth — the specific requirements below are
-verbatim intent, resolve their fine details immediately before building.
+**Complexity: Medium.** Scheduling and download quality-of-life — a fixed
+duration default, a create-and-start-now entry mode, a faster reconciler tick, an
+oEmbed title prefill, and a raw-`.ts` download affordance — plus one
+**research-gated** item (the metadata-driven quality picker). Each shippable item
+is small and independent; the Phase 0 invariants are untouched (the API stays the
+sole SQLite writer, the reconciler stays a finite idempotent tick, no request
+data reaches a shell or becomes a path/unit identifier). **No migration and no
+new `recordings` column** — every item here rides existing columns and existing
+routes, with at most one new best-effort read-only route.
 
-- **Duration field pre-filled with `1:10` always.** The schedule form's duration
-  input defaults to `1:10` on every new schedule (a fixed default, not a
-  remembered last value).
-- **"Now" tab on the schedule form.** A tab that **suppresses the date fields**
-  and keeps only the duration; **only the YouTube URL is mandatory** to start
-  recording immediately. (Distinct from Phase 2's `PATCH start_at = now`
-  "start now" on an already-scheduled row — this creates-and-starts in one step
-  from the form.)
-- **Lower the reconciler tick to 10 seconds.** Specifically because "start now"
-  currently misses too much when trying to start fast — the 30-second tick is too
-  coarse for immediate starts. Drop the reconciler timer to a 10-second interval
-  (`systemd/rec-live-tronic-reconciler.timer`).
-- **Fetch YouTube metadata to pre-fill the title.** Pre-fill the schedule title
-  from the channel name and the stream's own title. **Reuse the existing oEmbed
-  lookup** already wired for the `stage` field (Phase 2 —
-  `REC_LIVE_OEMBED_ENDPOINT`, reads `author_name`); do not reinvent a metadata
-  system — extend that same call to also surface the stream title for the title
-  prefill.
-- **Quality picker driven by YouTube metadata.** The available-formats list comes
-  from the stream's metadata. **`best` is always kept, shown with parens of what
-  it resolved to** (e.g. `best (1080p60)`), followed by **2 extra pills ordered
-  by quality**, and a **dropdown with all formats**. **Video-only until the
-  audio-only phase exists** (Phase 6) — no audio-only entries appear here yet.
-- **Download video as raw `.ts`, working even from trash.** A download affordance
-  for the raw `.ts` (the Phase 1 `GET /recordings/:id/file` route already serves
-  the bytes) that also works for a **trashed** recording, since its file is still
-  on disk until permanently deleted.
+**Research-and-pause gate (quality picker only).** The metadata-driven quality
+picker below depends on a streamlink capability that is **not yet confirmed on
+`irae-sheeta`** and on formats that may not exist at schedule time. It is a real
+stop-and-ask point (same shape as Phase 5's research gate): resolve the open
+questions at the end of this phase **before** building the picker. Everything
+else in Phase 4 (duration default, Now mode, tick, title prefill, download) is
+independent of that gate and ships without it — the current static quality pills
+(`best`/`1080p`/`720p`/`480p` in `ScheduleView.vue`) stay exactly as they are
+until the gate clears.
+
+**Decisions made for this phase.**
+
+- **Fixed `1:10` duration default (not remembered).** The schedule form's
+  `form.duration` (`web-client/src/views/ScheduleView.vue`) initializes to the
+  literal string `"1:10"` and resets to `"1:10"` (not `""`) in the form-clear
+  block at the end of `handleAddRecording`. `"1:10"` is already valid `H:MM`, so
+  the shipped `handleDurationBlur` reformat is a no-op on it and the
+  start/stop/duration sync watchers are unaffected — no conflict with the
+  reformat-on-blur behaviour already shipped (commit `0859b30`).
+- **Now mode is a client-only entry variant over the unchanged `POST
+  /recordings`.** No new backend route: a "Now" submission posts the **existing**
+  create payload with `start_at` computed **client-side** as `new
+  Date().toISOString()` and `stop_at` as `start_at + parseDurationMinutes(
+  form.duration)` (defaulting to 70 minutes when duration is blank). The row is
+  created `scheduled` with `start_at <= now`; the reconciler starts it on its
+  next tick (hence the tick drop below). This is **distinct from** the
+  already-shipped `handleStartNow` (`PATCH start_at = now`), which starts an
+  **already-scheduled** row early — Now mode **creates and schedules-at-now in one
+  step**. Do not conflate them: `handleStartNow` mutates an existing row via
+  PATCH; Now mode calls `api.createRecording`.
+- **Backend still requires a non-empty title, so Now mode must supply one.**
+  `text(input.title, "title")` in `RecorderService.createRecording` rejects an
+  empty title with `VALIDATION_ERROR`. Now mode keeps the title field
+  **optional in the UI** but sends a non-empty value: the oEmbed-prefilled title
+  if present, else a fallback of the trimmed stream URL. (The scheduled form keeps
+  its existing "Stream URL and title are required" client guard.)
+- **Reconciler tick 30s → 10s is a timer-file-only change.** Cadence is driven
+  solely by `systemd/rec-live-tronic-reconciler.timer` (`OnBootSec=30s`,
+  `OnUnitActiveSec=30s`, and the `Description=`). The `reconcileIntervalSeconds`
+  config value (`src/config.ts`, env `REC_LIVE_RECONCILE_INTERVAL_SECONDS`,
+  default 30) is defined but **consumed nowhere** — `RuntimeMaxSec` is derived
+  from `stop_at`, not the interval — so it does not need to change for correctness
+  (optionally align its default to 10 for consistency; flag only, not required).
+  No correctness change: the tick is idempotent per run, so a faster cadence only
+  raises poll frequency (SQLite read + `systemctl --user list-units` every 10s
+  instead of 30s), which is negligible on this host. The gain is that Now-mode and
+  early-start recordings begin within ≤10s instead of ≤30s.
+- **oEmbed title prefill reuses the existing lookup, adding one read-only
+  route.** `stageFromChannel` (`src/api/service.ts`) already fetches
+  `config.oembedEndpoint` and reads `author_name`, **discarding the `title` field
+  the same response carries**. Factor that fetch into one helper returning both
+  `{ authorName, title }`; `createRecording` keeps using `authorName` for `stage`
+  unchanged, and a new best-effort **`GET /recordings/oembed?url=<validated
+  youtube url>`** returns `{ author_name, title }` for the form to prefill from.
+  The URL is run through the existing `validateUrl` (YouTube-host allowlist, no
+  SSRF surface beyond what create already accepts); the route is best-effort with
+  the same short `AbortSignal.timeout(2_500)` and returns `200` with null fields
+  on any failure — it never errors the form. Client calls it on URL blur and fills
+  `form.title` **only when the user has not already typed one**, composing from
+  the stream `title` (and channel `author_name` as available) — exact composition
+  is a small UX choice, default to the stream `title`.
+- **Raw-`.ts` download reuses the existing serving route with a header variant;
+  trash needs no new access logic.** `GET /recordings/:id/file` gates only on
+  `status === "recorded"` (`src/app.ts`), and trash is **orthogonal to status** —
+  a trashed row keeps its terminal `recorded` status and its file on disk (Phase
+  3), so this route **already serves trashed recordings** with no change. The only
+  addition is a download-header variant: a truthy **`?download=1`** query param
+  sets `Content-Disposition: attachment; filename="<sanitized-title>.ts"`
+  (sanitize `title` to an ASCII-safe filename, fall back to `<id>.ts`); without
+  the param the route stays inline `video/mp2t` for the player/VLC exactly as
+  today. This is the "concrete need" Phase 8 item 2 deferred to ("no
+  `Content-Disposition` route added unless a concrete need appears") — a
+  human-friendly download filename — so the two do not conflict: Phase 4 adds the
+  opt-in header variant, Phase 8's converted-file download reuses it.
+
+**API surface (curl-first)** — matches spec.md's "API surface (curl-first)"
+conventions.
+
+- `GET /recordings/oembed?url=<validated youtube url>` (new, best-effort,
+  read-only) — returns `{ "author_name": string|null, "title": string|null }`.
+  `400` only if `url` fails the existing `validateUrl` YouTube-host check;
+  otherwise `200`, with null fields on any oEmbed timeout/error. No caching, no
+  persistence — purely a form-prefill helper.
+- `GET /recordings/:id/file?download=1` (header variant of the existing Phase 1
+  route) — same bytes, same `404`/`409` gates, but adds `Content-Disposition:
+  attachment; filename="<sanitized-title>.ts"`. Works for trashed rows because the
+  gate is on `status`, not `trashed_at`. Plain `GET /recordings/:id/file` is
+  unchanged (inline `video/mp2t`).
+- `POST /recordings` — **unchanged.** Now mode uses it as-is with a client-computed
+  `start_at = <now>` / `stop_at = <now + duration>` payload; no new field, no new
+  route, no new status.
+
+**UI.**
+
+- **Duration default** — `form.duration` starts and resets to `"1:10"`.
+- **Now / Scheduled entry toggle** on the booking card (`ScheduleView.vue`). A
+  two-option control (e.g. a `ref` `entryMode: "scheduled" | "now"`). In `"now"`
+  mode the **Start (04) and Stop (06) date fields are hidden**; URL (01, the only
+  mandatory field), Title (02, optional/prefilled), Quality (03), and Duration
+  (05) remain. Submit in Now mode branches to a create call with the
+  client-computed instants above; scheduled mode keeps today's `handleAddRecording`
+  path unchanged.
+- **Title prefill** — on URL-field blur (either mode) the form calls
+  `GET /recordings/oembed?url=…` and fills an empty `form.title`.
+- **Download control** — a Download button/link in `RecordingDetail.vue` (and the
+  trash view) pointing at `GET /recordings/:id/file?download=1`, alongside the
+  existing copy-stream-URL / player controls. Trashed recordings surface the same
+  download link in the trash view since the route serves them.
+- **Quality picker overhaul** — gated (see research gate + open questions); not
+  built until the gate clears. Until then the static pills stay.
+
+**Quality picker (research-gated — do NOT build until the gate clears).** Intended
+end state (owner's verbatim intent): the available-formats list is driven by the
+stream's real metadata — **`best` always kept and shown with a parenthetical of
+what it resolved to** (e.g. `best (1080p60)`), then **2 extra pills ordered by
+quality**, then a **dropdown listing all formats**, **video-only** until Phase 6
+adds audio-only entries. This is **not specified as an implementation here** because
+its feasibility is unconfirmed — see the open questions below. Do not invent a
+streamlink capability or a "best resolves to X" mechanism that has not been
+verified live first.
+
+**Functional tests** (server suite, test names only). The picker research item
+adds no server test until it is designed post-gate.
+
+```ts
+// test/functional/server.test.ts (additional blocks)
+t.test("returns oembed author and title for a valid youtube url");
+t.test("returns null oembed fields instead of erroring when the lookup fails");
+t.test("rejects an oembed prefill lookup for a non-youtube url");
+t.test("serves a finished recording file as an attachment when download=1");
+t.test("serves a trashed recording's file for download");
+t.test("creates a now-mode recording that starts at the current time");
+```
+
+**Implementation sequence.** (The quality-picker research gate at step 6 is an
+owner-review checkpoint, not the finish line — steps 1–5 ship independently of
+it.)
+
+1. Lower the reconciler tick: change `OnBootSec`, `OnUnitActiveSec`, and the
+   `Description` in `systemd/rec-live-tronic-reconciler.timer` from 30s to 10s
+   (optionally align the unused `reconcileIntervalSeconds` default in
+   `src/config.ts`). Commit.
+2. oEmbed helper + route: factor the existing `stageFromChannel` fetch in
+   `src/api/service.ts` into a shared helper returning `{ authorName, title }`;
+   keep `createRecording`'s `stage` derivation using `authorName`; add
+   `GET /recordings/oembed` in `src/app.ts` returning `{ author_name, title }`
+   (best-effort, validated URL). Commit.
+3. Download header variant: add the `?download=1` branch to
+   `GET /recordings/:id/file` in `src/app.ts` setting `Content-Disposition:
+   attachment` with a sanitized `<title>.ts` filename (fallback `<id>.ts`). Commit.
+4. Client: `form.duration` default/reset `"1:10"`; the Now/Scheduled entry toggle
+   in `ScheduleView.vue` with Start/Stop hidden and the client-computed
+   `start_at`/`stop_at` create payload in Now mode; the on-blur title-prefill call
+   to `GET /recordings/oembed`; an `api.ts` helper for the oembed lookup. Commit.
+5. Client: Download control in `RecordingDetail.vue` and the trash view pointing at
+   `?download=1`. Functional tests above; verify on `irae-sheeta` (Now-mode start
+   latency ≤10s, prefill fills an empty title, download serves an attachment for
+   both a live archive row and a trashed row). Commit.
+6. **Quality-picker research gate** — answer the open questions on `irae-sheeta`,
+   review with the owner, then plan and build the metadata-driven picker (or record
+   that it stays the static pills). Separate commit(s) after the gate clears.
+
+**Acceptance criteria — what "Phase 4 done" looks like.**
+- [ ] The duration field defaults to `1:10` on a fresh form and after each submit,
+      with no regression to the reformat-on-blur / start-stop sync behaviour.
+- [ ] A "Now" entry mode hides the Start/Stop fields, requires only the URL, and
+      creates a recording that begins within ≤10s of submission.
+- [ ] The reconciler timer fires every 10s; Now-mode and early-start recordings
+      start within one tick.
+- [ ] The title field is prefilled from a best-effort oEmbed lookup (channel +
+      stream title) that never blocks or errors the form, reusing the existing
+      oEmbed integration.
+- [ ] A raw `.ts` download affordance downloads with a human-friendly
+      `<title>.ts` filename and works for a trashed recording, with the inline
+      streaming/player path unchanged.
+- [ ] curl parity holds for the oEmbed prefill and the download variant — no
+      browser-only path.
+- [ ] The quality-picker research gate is answered and reviewed before any picker
+      build; the static pills remain until then.
+
+**Open questions (quality picker — resolve at the step 6 gate, do not guess
+now).**
+- **Are per-format labels queryable before/at schedule time at all?** Scheduled
+  bookings are created **hours before** the stream goes live, but a stream's
+  available formats only exist **once it is live**. So a metadata-driven picker
+  likely only applies to **Now mode** (stream already live); scheduled bookings
+  may have to keep the static pills. Confirm this timing constraint before
+  designing the UX.
+- **Does `streamlink --json <url>` reliably expose YouTube's per-format list and
+  what `best` resolves to, on the pinned streamlink 8.4.0 on `irae-sheeta`?** This
+  is an **unconfirmed streamlink capability** — verify live (it is not installed
+  in this dev environment and the host's streamlink is human-owned) before
+  building the "best (resolves to X)" parenthetical or the formats list. If it
+  does not cleanly expose the `best → named-quality` mapping, the parenthetical is
+  not implementable as specified and the owner must pick a fallback.
+- **New backend probe surface.** A metadata-driven picker needs the server to shell
+  `streamlink --json` for a user-supplied (validated) URL — a new subprocess
+  boundary. It must reuse the existing no-shell-injection discipline (validated
+  URL, argv never a shell fragment, as in `buildStreamlinkArgs`) and a bounded
+  timeout. Design this only after the two questions above are answered yes.
 
 ### Phase 5 — editing actions
 
