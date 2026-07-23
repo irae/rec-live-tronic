@@ -340,151 +340,199 @@ tailing route is needed.
 
 ### Phase 2 — web client
 
-**Complexity: Medium.** Conventional UI over the existing public API; the
-integration risk is media playback across devices, not the CRUD.
+**Complexity: Medium.** The UI is conventional and every view maps onto existing
+Phase 0/1 JSON routes; the only real integration risk is media playback across
+devices. A mobile-first, responsive single-page client, built once from a design
+the owner selects at the prototype gate (step 2), served as static files by the
+existing `web` Express service. One new backend behaviour only: a hard delete
+that removes both the file and its SQLite row (see below).
 
-A mobile-first, responsive web client served from the same public API. The full
-detailed design is drafted separately — see the forthcoming Phase 2 design
-sketch (pending owner review); this block fixes only its scope and boundaries.
+**Dependencies (decision).** Build the client with **Vue 3** (runtime dependency
+`vue`) and **Vite** (dev-only build tool `vite` + `@vitejs/plugin-vue`), using
+Single-File Components (`.vue` files carrying template/script/style together) and
+`<script setup>`. This reopens and replaces the earlier "no new npm dependencies"
+position — the reopening has happened and this is the decision, not a hedge. The
+reasoning: the app will grow over time, the owner reviews the code rather than
+vibe-coding it, a framework keeps UI patterns consistent screen-to-screen as it
+grows, and a build step is already normal here (the server compiles TypeScript
+with `tsc`). Vite specifically — first-class Vue integration, near-zero config,
+instant dev server, and a standard/recognisable setup for anyone reading the code
+later — not webpack. Output is plain static JS/CSS/HTML; no SSR, no second
+service, no change to deployment shape. State management stays **component-local**
+(`ref`/`reactive` + `fetch`); no Pinia/Vuex and no `vue-router` — with only three
+views a small reactive `view` state in `App.vue` is enough, and adding a router
+or store would be unjustified scope for this size.
 
-1. **Read-only archive view.** List and inspect past/finished
-   (`recorded`/`muxed`) recordings. No editing of finished captures here — file
-   operations are Phase 3.
-2. **Full scheduling CRUD** as an API client over the Phase 0 routes: create,
-   edit, cancel, stop early, and start immediately. No new backend behaviour —
-   these map onto existing schedule/PATCH/cancel operations.
-3. **Delete a finished recording's file**, part of the same CRUD surface, via
-   `DELETE /recordings/:id/file`. This manual delete is the **only** deletion
-   mechanism in the system; there is no age/size-based automated cleanup
-   anywhere. It deletes the target recording's own file(s); derived recordings
-   (trim/split outputs, once Phase 3 exists) are independent rows deleted on
-   their own. Extend the functional server suite (test name only):
-   `t.test("deletes a finished recording's file on explicit request")`.
-4. **Native playback.** A basic HTML5 `<video>` element pointed at the Phase 1
-   `GET /recordings/:id/file` route, using the browser's built-in controls — no
-   custom JS player.
-5. Verify the client against real recordings and confirm no operation requires a
-   browser-only path (curl parity preserved).
+**Repository layout additions.**
+- `web-client/` — the Vite + Vue source (git-tracked): `web-client/index.html`,
+  `web-client/vite.config.ts`, `web-client/src/main.ts`, `web-client/src/App.vue`
+  (holds the reactive `view`/`selectedId` state and switches between the three
+  views), and `web-client/src/api.ts` (a thin `fetch` wrapper over the JSON API —
+  the single place that knows route paths and shapes errors).
+- Vue view SFCs under `web-client/src/views/`: `ArchiveView.vue`,
+  `ScheduleView.vue`, `RecordingDetail.vue`. Extract a shared component only where
+  it removes real duplication (e.g. `web-client/src/components/RecordingList.vue`
+  shared by archive and schedule lists); do not pre-factor speculative
+  components.
+- `web-client/vite.config.ts`: `@vitejs/plugin-vue`, `root: "web-client"`,
+  `build.outDir: "../dist/public"`, and a dev-server `proxy` forwarding
+  `/recordings`, `/cookies`, and `/health` to the local Express API so
+  `vite dev` works against a running backend.
+- `design-prototypes/` — git-ignored (add to `.gitignore`); holds the three
+  competing static-HTML themes from the gate. Never shipped or committed.
 
-#### Phase 2 design sketch — DRAFT, pending owner review
+**Build and serving integration.**
+- Add `vue`/`vite`/`@vitejs/plugin-vue` to `package.json`, and a `build:client`
+  script (`vite build`). Extend the existing `build` script to run the client
+  build after `tsc` so the client lands in `dist/public` after the `clean` step
+  wipes `dist` and `tsc` repopulates it: `build` becomes
+  `npm run clean && tsc -p tsconfig.json && vite build`. Add `dev:client`
+  (`vite dev`) for local UI work. The container release build
+  (`Dockerfile.build` → `scripts/build-release.sh`) already runs `npm run build`
+  with dev dependencies present, so Vite runs there with no pipeline change.
+- Serve the built client from `src/app.ts` in `createApp` via
+  `express.static(<dist>/public)` mounted at `/`. Register it **after** the
+  existing API routes so it never shadows `/recordings`, `/cookies`, `/health`,
+  or the private routes; static serving only answers real files (`index.html`,
+  hashed `assets/*`). Because the `web` release package already ships `dist/`
+  (Phase 1 Part B), `dist/public` is carried along automatically — **no change to
+  the deps/web/reconciler package boundaries**.
 
-> **This subsection is a draft for the owner to react to, not a committed
-> design or an implementation-ready plan.** ~5-minute read. Nothing here is
-> built until the owner picks a theme (gate below) and signs off.
-
-**Shape.** One small client served by the existing `web` service off the same
-public API — no second service. Three views: an **archive list** (finished
-recordings, newest first, tap to open detail), a **schedule** view (the create
-form + upcoming/running list with inline edit/cancel/stop-early/start-now), and
-a recording **detail** panel holding the player and the share affordances below.
-
-**Dependencies (decision).** **No new npm dependencies.** Plain vanilla
-JavaScript with `fetch` against the existing JSON API, plain hand-written CSS,
-static assets served by the `web` Express app. No SPA framework, no bundler, no
-CSS framework — per the simplicity guidelines this app is small enough that a
-framework is pure liability. (Playwright is already the test tool and is
-dev-only; it adds no runtime dependency.) If a chosen prototype theme somehow
-argued for more, that is a decision to re-open explicitly with the owner, not a
-default.
-
-**Mobile-first, genuinely responsive.** Design at phone width first (single
-column, thumb-reachable actions), then let it breathe on desktop (list + detail
-side by side past a breakpoint). Not a phone-only site scaled up — desktop is a
-first-class second target, just not the starting point.
-
-**API mapping (existing Phase 0/1 routes only — no new endpoints).** The list
-route filters by a **single** status (`GET /recordings?status=<one>`), so the
-simplest client fetches `GET /recordings` once and partitions client-side rather
-than issuing multiple filtered calls.
-- **Archive list** → `GET /recordings`, keep rows with status `recorded`
-  (finished/streamable), newest first.
-- **Schedule view** → same `GET /recordings`, keep `scheduled` + `recording` for
-  the upcoming/running list; **create** → `POST /recordings`; **edit** →
-  `PATCH /recordings/:id`; **cancel** → `DELETE /recordings/:id`; **stop early**
-  → `PATCH /recordings/:id` setting `stop_at` to now (allowed while `recording`);
+**Views and API mapping (existing Phase 0/1 routes only — no new read/write
+endpoints).** `GET /recordings` filters by a **single** status
+(`?status=<one>`), so the client fetches `GET /recordings` once and partitions
+the result client-side rather than issuing multiple filtered calls.
+- **`ArchiveView.vue`** → `GET /recordings`, keep rows with status `recorded`
+  (finished/streamable), newest first; tap a row to open the detail view.
+- **`ScheduleView.vue`** → same `GET /recordings` result, keep `scheduled` +
+  `recording` for the upcoming/running list; **create** → `POST /recordings`;
+  **edit** → `PATCH /recordings/:id`; **cancel** → `DELETE /recordings/:id`
+  (existing soft cancel — keeps the row as `cancelled`); **stop early** →
+  `PATCH /recordings/:id` setting `stop_at` to now (allowed while `recording`);
   **start now** → `PATCH /recordings/:id` setting `start_at` to now (while
   `scheduled`). No dedicated start/stop endpoints exist or are added.
-- **Detail / player** → `GET /recordings/:id` for metadata; the Phase 1
-  `GET /recordings/:id/file` URL is both the `<video>` `src` and the string the
-  copy-URL button places on the clipboard (the file route serves `recorded`
-  files and `409`s otherwise, so the player only appears for finished rows).
-  **Delete** → `DELETE /recordings/:id/file` (the only deletion mechanism; no
-  automated cleanup).
+- **`RecordingDetail.vue`** → `GET /recordings/:id` for metadata; the Phase 1
+  `GET /recordings/:id/file` URL is both the `<video>` `src` and the copy-URL
+  string (the file route serves `recorded` files and `409`s otherwise, so the
+  player only renders for finished rows). Holds the delete control (below).
 
-**Playback + share affordances (recording detail).**
-- **Native player.** HTML5 `<video controls>` at the Phase 1
-  `GET /recordings/:id/file` URL, browser built-in controls only (already the
-  committed scope above).
-- **Copy stream URL.** A always-present "copy stream URL" button that puts the
+**Playback + share affordances (`RecordingDetail.vue`).**
+- **Native player.** HTML5 `<video controls>` at `GET /recordings/:id/file`,
+  browser built-in controls only — no custom JS player.
+- **Copy stream URL.** An always-present "copy stream URL" button that puts the
   plain `http://<host>:<port>/recordings/<id>/file` URL on the clipboard, so the
   owner can paste it into VLC's *Open Network Stream* by hand on any device,
-  regardless of any deep-link support. This is the reliable fallback and should
-  never be gated behind platform detection.
-- **VLC-iOS hand-off (optional, best-effort, iOS only).** VLC for iOS does
-  support a hand-off URL scheme:
-  `vlc-x-callback://x-callback-url/stream?url=<stream-URL>` (use this form; the
-  plain `vlc://` scheme is unreliable). Offer it as an **optional "Open in VLC"
-  link shown on iOS only**, clearly secondary to the native `<video>` player and
-  to the copy-URL fallback, which stay primary and reliable. Known caveats make
-  it best-effort, not a guaranteed feature: it fails silently if VLC isn't
-  installed, Safari shows an unavoidable "Open in VLC?" confirmation prompt, and
-  reliability is inconsistent (some users report it working at most a couple of
-  times, or failing via the scheme while the same stream opens fine when pasted
-  manually). Frame it in the UI as "may not always work — use copy-URL if it
-  doesn't." (An HLS/segmented-playlist pipeline was considered as a "more native"
-  iOS path and rejected: it is a materially bigger feature than the plain
-  single-file `sendFile()` route already built and verified, and contradicts the
-  simplicity guidelines for a marginal gain.)
+  regardless of deep-link support. This is the reliable fallback and is never
+  gated behind platform detection.
+- **VLC-iOS hand-off (optional, best-effort, iOS only).** VLC for iOS supports a
+  hand-off URL scheme: `vlc-x-callback://x-callback-url/stream?url=<stream-URL>`
+  (use this form; the plain `vlc://` scheme is unreliable). Show it as an
+  **optional "Open in VLC" link on iOS only**, clearly secondary to the native
+  player and the copy-URL fallback, which stay primary. Known caveats make it
+  best-effort: it fails silently if VLC isn't installed, Safari shows an
+  unavoidable "Open in VLC?" prompt, and reliability is inconsistent (some users
+  report it working at most a couple of times, or failing via the scheme while
+  the same stream opens fine when pasted manually). Frame it in the UI as "may
+  not always work — use copy-URL if it doesn't." (An HLS/segmented-playlist
+  pipeline was considered as a "more native" iOS path and rejected: materially
+  bigger than the plain single-file `sendFile()` route already built and
+  verified, and against the simplicity guidelines for a marginal gain.)
 
-**Execution sequence (draft).** The design-prototype gate (step 2) is a pause
-point *within* implementation, not the finish line — real building continues
-past it.
+**Delete (the one new backend behaviour — removes file *and* row).** The only
+deletion mechanism in the system; there is no age/size-based automated cleanup
+anywhere. `DELETE /recordings/:id/file` (the route `spec.md` reserves for this)
+performs a full purge: it unlinks the recording's on-disk file(s) **and** deletes
+its SQLite row, so neither a dangling row pointing at a missing file nor an
+orphaned file for a removed row is ever left behind. Despite `/file` in the path,
+it deletes the whole record — a finished recording is only its file plus that row,
+and keeping the row after the file is gone would strand a dangling reference.
 
-1. Add a static-asset route/dir to the `web` Express app to serve the client
-   (`index.html` + one CSS + one JS file), and confirm it loads with placeholder
-   data driven by the real `GET /recordings` response.
+1. Add `RecordingRepository.delete(id)` (deletes the row; the API remains the
+   sole SQLite writer) and `RecorderService.deleteRecording(id)`: resolve the
+   recording (`404` if absent), require status `recorded` (`409` otherwise, so a
+   `scheduled`/`recording` row is cancelled through the existing route, never
+   hard-deleted mid-capture), unlink `ts_path` (and the future `final_path`)
+   tolerating an already-missing file, then delete the row. If unlink fails for
+   any reason other than the file already being gone, return `500` and leave the
+   row intact so the delete is safely retryable — never delete the row while its
+   file may still exist.
+2. Point the existing `DELETE /recordings/:id/file` handler in `src/app.ts` at
+   `deleteRecording` and respond `204 No Content` on success (matching the
+   `DELETE /cookies/:id` shape). Derived trim/split recordings (Phase 3) are
+   independent rows with their own files and are deleted the same way, each on
+   its own.
+3. Extend the functional server suite (test names only):
+
+```ts
+// test/functional/server.test.ts (additional blocks)
+t.test("deletes a finished recording's file and row on explicit request");
+t.test("rejects deleting a recording that is not finished");
+t.test("leaves no dangling row and no orphaned file after a delete");
+```
+
+**Implementation sequence.** The design-prototype gate (step 2) is a pause point
+*within* implementation, not the finish line — real building continues past it.
+
+1. Scaffold the Vite + Vue project under `web-client/` (config, `index.html`,
+   `main.ts`, empty `App.vue`, `api.ts`), wire the `build`/`build:client`/
+   `dev:client` scripts and `express.static("dist/public")` serving in
+   `src/app.ts`, and confirm the shell loads and `api.ts` renders live
+   `GET /recordings` data with throwaway markup.
 2. **Design-prototype gate.** Produce **three competing static-HTML visual
    themes** — full look-and-feel mockups with dummy data, no backend wiring — in
-   a **git-ignored folder** (e.g. `design-prototypes/`, added to `.gitignore`) so
-   the owner opens each in a browser and picks one. **Pause here for the owner's
-   pick;** the chosen theme's HTML/CSS becomes the styling basis and the other
-   two are discarded. Later steps build on the winner.
-3. Build the chosen theme's real markup + CSS into the client, mobile-first with
-   the desktop breakpoint (list + detail side by side past it).
-4. Wire the **archive list** and **schedule** views to their endpoints per the
-   API mapping above (single `GET /recordings` fetch + client-side partition;
+   the git-ignored `design-prototypes/` folder for the owner to open in a browser
+   and pick one. **Each of the three prototypes must be built by an agent that
+   first loads Claude Code's `frontend-design` skill** (the point of the gate is
+   three genuinely distinct, intentional visual directions, not three
+   templated-looking variants — so whoever dispatches the three sub-agents must
+   instruct each to load `frontend-design` before building). **Pause here for the
+   owner's pick;** the winning theme's HTML/CSS becomes the styling basis and the
+   other two are discarded.
+3. Port the chosen theme's markup and CSS into the real Vue SFCs — its layout and
+   styles become the `<template>`/`<style>` of `App.vue` and the three view
+   components, mobile-first with the desktop breakpoint (list + detail side by
+   side past it). The static prototype is translated into components here; it is
+   not shipped as-is.
+4. Implement `ArchiveView.vue` and `ScheduleView.vue` against their endpoints per
+   the mapping above (single `GET /recordings` fetch + client-side partition;
    create/edit/cancel; stop-early and start-now as `PATCH`es).
-5. Build the **detail** view: `<video controls>` at `GET /recordings/:id/file`,
-   the always-present copy-URL button, and the optional iOS-only "Open in VLC"
-   `vlc-x-callback` link framed as best-effort.
-6. **Playwright smoke pass.** Deliberately light: Playwright's built-in iPhone
+5. Implement `RecordingDetail.vue`: native `<video>` player, always-present
+   copy-URL button, optional iOS-only "Open in VLC" link, and the delete control
+   wired to `DELETE /recordings/:id/file`.
+6. Implement the delete backend (`RecordingRepository.delete`,
+   `RecorderService.deleteRecording`, route handler) and its functional tests.
+7. **Playwright smoke pass.** Deliberately light: Playwright's built-in iPhone
    device profile (e.g. `devices['iPhone 13']`) over the core flows (list loads,
-   schedule create, open detail, player present, copy-URL works), plus a
-   desktop-viewport pass. Smoke-level device emulation, **not** exhaustive
+   schedule create, open detail, player present, copy-URL works, delete works),
+   plus a desktop-viewport pass. Smoke-level device emulation, **not** exhaustive
    cross-device/browser mobile QA.
+8. Verify on `irae-sheeta` against real recordings and confirm curl parity — no
+   operation requires a browser-only path.
 
-**Acceptance criteria (draft — what "Phase 2 done" looks like).**
+**Acceptance criteria — what "Phase 2 done" looks like.**
 - [ ] Schedule, edit, cancel, stop-early, and start-now all work from the UI
       against real recordings on `irae-sheeta`.
 - [ ] Archive view lists finished (`recorded`) recordings and plays them in the
       native `<video>` player.
-- [ ] Deleting a finished recording's file works from the UI (no manual SSH
-      SQL/`rm` needed).
+- [ ] Deleting a finished recording removes both its file and its SQLite row —
+      no dangling row, no orphaned file — from the UI (no manual SSH SQL/`rm`).
 - [ ] Copy-URL puts a working `GET /recordings/:id/file` stream URL on the
       clipboard that opens in VLC's *Open Network Stream*.
-- [ ] The optional iOS "Open in VLC" link is present on iOS only and degrades
+- [ ] The optional iOS "Open in VLC" link appears on iOS only and degrades
       silently to copy-URL when it doesn't fire.
 - [ ] Phone-width and post-breakpoint desktop layouts are both verified.
 - [ ] Playwright's iPhone-profile pass and desktop pass are green.
-- [ ] No operation requires a browser-only path — curl parity holds, matching
-      the committed Phase 2 scope block above.
-- [ ] No new npm runtime dependency was added.
+- [ ] The client builds via `vite build` into `dist/public` and is served by the
+      existing `web` service with no change to the release package boundaries.
+- [ ] No operation requires a browser-only path — curl parity holds.
 
 ### Phase 3 — file operations
 
 **Complexity: Medium.** Non-destructive derived-recording operations over
 already-finished files. None of this touches the recorder core. (Deleting a
-finished recording's file moved to Phase 2 alongside the other CRUD.)
+finished recording — file plus its SQLite row — moved to Phase 2 alongside the
+other CRUD; derived recordings created here are independent rows deleted the same
+way.)
 
 Trim and split follow the **derived-recording-row** pattern: each produces one
 or more new recording rows with their own server-generated IDs whose output
