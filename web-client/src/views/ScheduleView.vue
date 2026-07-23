@@ -37,6 +37,8 @@
             <div class="field">
               <label><span class="num">03</span> · Quality</label>
               <div class="quality">
+                <input type="radio" name="q" id="q0" value="best" v-model="form.quality" />
+                <label for="q0">best</label>
                 <input type="radio" name="q" id="q1" value="1080p" v-model="form.quality" />
                 <label for="q1">1080p</label>
                 <input type="radio" name="q" id="q2" value="720p" v-model="form.quality" />
@@ -104,7 +106,7 @@
                 </div>
                 <div class="edit-field">
                   <label>Start</label>
-                  <input class="input" v-model="editForm.start" type="datetime-local" />
+                  <input class="input" v-model="editForm.start" type="datetime-local" :disabled="editingRecording?.status === 'recording'" />
                 </div>
                 <div class="edit-field">
                   <label>Stop</label>
@@ -113,6 +115,23 @@
                 <div class="actions">
                   <button class="tbtn" @click.prevent="saveEdit(rec.id)">Save</button>
                   <button class="tbtn" @click.prevent="cancelEdit">Cancel</button>
+                </div>
+              </div>
+            </template>
+            <template v-else-if="extendingId === rec.id">
+              <div class="slot__edit">
+                <div class="edit-field">
+                  <label>New stop time</label>
+                  <input class="input" v-model="extendForm.stop" type="datetime-local" />
+                </div>
+                <div class="extend-quick">
+                  <button class="tbtn tbtn--extend" @click.prevent="addMinutesToExtend(10)">+10 min</button>
+                  <button class="tbtn tbtn--extend" @click.prevent="addMinutesToExtend(30)">+30 min</button>
+                  <button class="tbtn tbtn--extend" @click.prevent="addMinutesToExtend(60)">+60 min</button>
+                </div>
+                <div class="actions">
+                  <button class="tbtn" @click.prevent="saveExtend(rec.id)">Extend</button>
+                  <button class="tbtn" @click.prevent="cancelExtend">Cancel</button>
                 </div>
               </div>
             </template>
@@ -134,8 +153,9 @@
               <div class="slot__meta mono">{{ formatTimeInfo(rec) }}</div>
               <div class="actions">
                 <button v-if="rec.status === 'recording' && !stoppingIds.has(rec.id)" class="tbtn tbtn--stop" @click.prevent="handleStopEarly(rec.id)">■ Stop early</button>
+                <button v-if="rec.status === 'recording' && !stoppingIds.has(rec.id)" class="tbtn tbtn--extend" @click.prevent="handleExtend(rec)">⤴ Extend</button>
                 <button v-else-if="rec.status === 'scheduled' && !hasStartPassed(rec)" class="tbtn tbtn--go" @click.prevent="handleStartNow(rec.id)">▶ Start now</button>
-                <button v-if="rec.status === 'scheduled'" class="tbtn" @click.prevent="startEdit(rec)">Edit</button>
+                <button v-if="rec.status === 'scheduled' || rec.status === 'recording'" class="tbtn" @click.prevent="startEdit(rec)">Edit</button>
                 <button v-if="rec.status === 'scheduled'" class="tbtn" @click.prevent="handleCancel(rec.id)">Cancel</button>
               </div>
             </template>
@@ -170,17 +190,21 @@ interface Recording {
 const recordings = ref<Recording[]>([]);
 const error = ref<string | null>(null);
 const editingId = ref<string | null>(null);
+const extendingId = ref<string | null>(null);
 const stoppingIds = ref<Set<string>>(new Set());
 const editForm = reactive({
   title: "",
   start: "",
   stop: "",
 });
+const extendForm = reactive({
+  stop: "",
+});
 
 const form = reactive({
   url: "",
   title: "",
-  quality: "1080p",
+  quality: "best",
   start: "",
   duration: "",
   stop: "",
@@ -251,6 +275,10 @@ const displayedRecordings = computed(() => {
   );
 });
 
+const editingRecording = computed(() => {
+  return recordings.value.find((rec) => rec.id === editingId.value);
+});
+
 async function fetchRecordings(): Promise<void> {
   try {
     error.value = null;
@@ -304,7 +332,7 @@ async function handleAddRecording(): Promise<void> {
     recordings.value.unshift(newRecording as unknown as Recording);
     form.url = "";
     form.title = "";
-    form.quality = "1080p";
+    form.quality = "best";
     form.start = "";
     form.duration = "";
     form.stop = "";
@@ -363,6 +391,41 @@ async function handleStopEarly(id: string): Promise<void> {
   }
 }
 
+function handleExtend(rec: Recording): void {
+  extendingId.value = rec.id;
+  extendForm.stop = toLocalDatetimeInputValue(rec.stopAt);
+}
+
+function addMinutesToExtend(minutes: number): void {
+  if (!extendForm.stop) return;
+  const stopDate = new Date(extendForm.stop);
+  const newStop = new Date(stopDate.getTime() + minutes * 60_000);
+  extendForm.stop = toLocalDatetimeInputValue(newStop.toISOString());
+}
+
+async function saveExtend(id: string): Promise<void> {
+  try {
+    error.value = null;
+    const stopDate = new Date(extendForm.stop);
+    const result = await api.patchRecording(id, {
+      stop_at: stopDate.toISOString(),
+    });
+    const idx = recordings.value.findIndex((rec) => rec.id === id);
+    if (idx >= 0) {
+      recordings.value[idx] = result.recording as unknown as Recording;
+    }
+    extendingId.value = null;
+  } catch (err) {
+    console.error("Failed to extend recording:", err);
+    error.value =
+      err instanceof Error ? err.message : "Failed to extend recording";
+  }
+}
+
+function cancelExtend(): void {
+  extendingId.value = null;
+}
+
 function toLocalDatetimeInputValue(isoString: string): string {
   const date = new Date(isoString);
   const offsetMs = date.getTimezoneOffset() * 60_000;
@@ -382,16 +445,22 @@ async function saveEdit(id: string): Promise<void> {
     const startDate = new Date(editForm.start);
     const stopDate = new Date(editForm.stop);
 
-    await api.patchRecording(id, {
+    const payload: any = {
       title: editForm.title,
-      start_at: startDate.toISOString(),
       stop_at: stopDate.toISOString(),
-    });
+    };
+    if (editingRecording.value?.status !== 'recording') {
+      payload.start_at = startDate.toISOString();
+    }
+
+    await api.patchRecording(id, payload);
 
     const idx = recordings.value.findIndex((rec) => rec.id === id);
     if (idx >= 0) {
       recordings.value[idx].title = editForm.title;
-      recordings.value[idx].startAt = startDate.toISOString();
+      if (editingRecording.value?.status !== 'recording') {
+        recordings.value[idx].startAt = startDate.toISOString();
+      }
       recordings.value[idx].stopAt = stopDate.toISOString();
     }
 
@@ -579,6 +648,13 @@ function formatTimeInfo(rec: Recording): string {
   outline: none;
   background: var(--paper);
   box-shadow: 3px 3px 0 var(--fluoro);
+}
+
+.input:disabled {
+  background: var(--paper-2);
+  color: var(--ink-soft);
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .quality {
@@ -846,6 +922,23 @@ function formatTimeInfo(rec: Recording): string {
   background: var(--fluoro);
   color: #fff;
   box-shadow: 2px 2px 0 var(--ink);
+}
+
+.tbtn--extend {
+  border-color: var(--violet);
+  color: var(--violet);
+}
+
+.tbtn--extend:hover {
+  background: var(--violet);
+  color: #fff;
+  box-shadow: 2px 2px 0 var(--ink);
+}
+
+.extend-quick {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .empty-queue {
