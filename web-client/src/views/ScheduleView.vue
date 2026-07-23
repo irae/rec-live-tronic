@@ -11,6 +11,7 @@
         <form class="card" @submit.prevent="handleAddRecording">
           <div class="card__head">New Recording <small>rec.new</small></div>
           <div class="card__body">
+            <div v-if="error" class="error-message">{{ error }}</div>
             <div class="field">
               <label for="url"><span class="num">01</span> · Stream URL</label>
               <input
@@ -53,9 +54,8 @@
                 <input
                   class="input"
                   id="start"
-                  type="text"
+                  type="datetime-local"
                   v-model="form.start"
-                  placeholder="dd/mm hh:mm"
                 />
               </div>
               <div>
@@ -63,9 +63,8 @@
                 <input
                   class="input"
                   id="stop"
-                  type="text"
+                  type="datetime-local"
                   v-model="form.stop"
-                  placeholder="dd/mm hh:mm"
                 />
               </div>
             </div>
@@ -79,55 +78,80 @@
 
       <!-- QUEUE -->
       <div class="queue">
-        <p class="eyebrow">On now &amp; upcoming <span class="count">{{ recordings.length }}</span></p>
+        <p class="eyebrow">On now &amp; upcoming <span class="count">{{ displayedRecordings.length }}</span></p>
 
         <div class="timetable">
           <article
-            v-for="rec in recordings"
+            v-for="rec in displayedRecordings"
             :key="rec.id"
             :class="['slot', rec.status === 'recording' ? 'slot--live' : 'slot--sched']"
           >
-            <div class="slot__top">
-              <div>
-                <div class="slot__title">{{ rec.title }}</div>
-                <div class="slot__meta">{{ rec.stage || "Stage" }} · {{ rec.event || "Event" }} · {{ rec.quality || "n/a" }}</div>
+            <template v-if="editingId === rec.id">
+              <div class="slot__edit">
+                <div class="edit-field">
+                  <label>Title</label>
+                  <input class="input" v-model="editForm.title" type="text" />
+                </div>
+                <div class="edit-field">
+                  <label>Start</label>
+                  <input class="input" v-model="editForm.start" type="datetime-local" />
+                </div>
+                <div class="edit-field">
+                  <label>Stop</label>
+                  <input class="input" v-model="editForm.stop" type="datetime-local" />
+                </div>
+                <div class="actions">
+                  <button class="tbtn" @click.prevent="saveEdit(rec.id)">Save</button>
+                  <button class="tbtn" @click.prevent="cancelEdit">Cancel</button>
+                </div>
               </div>
-              <span v-if="rec.status === 'recording'" class="state state--live">
-                <span class="blip"></span>Rec
-              </span>
-              <span v-else class="state state--sched">Scheduled</span>
-            </div>
-            <div v-if="rec.status === 'recording'" class="prog"><i></i></div>
-            <div class="slot__meta mono">{{ formatTimeInfo(rec) }}</div>
-            <div class="actions">
-              <button v-if="rec.status === 'recording'" class="tbtn tbtn--stop">■ Stop early</button>
-              <button v-else class="tbtn tbtn--go">▶ Start now</button>
-              <button class="tbtn">Edit</button>
-              <button v-if="rec.status === 'scheduled'" class="tbtn">Cancel</button>
-            </div>
+            </template>
+            <template v-else>
+              <div class="slot__top">
+                <div>
+                  <div class="slot__title">{{ rec.title }}</div>
+                  <div class="slot__meta">{{ rec.stage || "Stage" }} · {{ rec.quality || "n/a" }}</div>
+                </div>
+                <span v-if="rec.status === 'recording'" class="state state--live">
+                  <span class="blip"></span>Rec
+                </span>
+                <span v-else class="state state--sched">Scheduled</span>
+              </div>
+              <div v-if="rec.status === 'recording'" class="prog"><i></i></div>
+              <div class="slot__meta mono">{{ formatTimeInfo(rec) }}</div>
+              <div class="actions">
+                <button v-if="rec.status === 'recording'" class="tbtn tbtn--stop" @click.prevent="handleStopEarly(rec.id)">■ Stop early</button>
+                <button v-else class="tbtn tbtn--go" @click.prevent="handleStartNow(rec.id)">▶ Start now</button>
+                <button class="tbtn" @click.prevent="startEdit(rec)">Edit</button>
+                <button v-if="rec.status === 'scheduled'" class="tbtn" @click.prevent="handleCancel(rec.id)">Cancel</button>
+              </div>
+            </template>
           </article>
         </div>
 
-        <p v-if="recordings.length === 0" class="empty-queue">No scheduled or recording sessions yet.</p>
+        <p v-if="displayedRecordings.length === 0" class="empty-queue">No scheduled or recording sessions yet.</p>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from "vue";
+import { ref, reactive, onMounted, computed } from "vue";
 import { api } from "../api";
 
 interface Recording {
   id: string;
   title: string;
   status: string;
-  url?: string;
-  quality?: string;
-  start_at?: string;
-  stop_at?: string;
-  stage?: string;
-  event?: string;
+  url: string;
+  quality: string;
+  startAt: string;
+  stopAt: string;
+  stage: string | null;
+  cookieId: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 defineProps<{
@@ -139,6 +163,13 @@ const emit = defineEmits<{
 }>();
 
 const recordings = ref<Recording[]>([]);
+const error = ref<string | null>(null);
+const editingId = ref<string | null>(null);
+const editForm = reactive({
+  title: "",
+  start: "",
+  stop: "",
+});
 
 const form = reactive({
   url: "",
@@ -148,27 +179,181 @@ const form = reactive({
   stop: "",
 });
 
+const displayedRecordings = computed(() => {
+  return recordings.value.filter(
+    (rec) => rec.status === "scheduled" || rec.status === "recording"
+  );
+});
+
 onMounted(async () => {
   try {
-    const scheduled = await api.listRecordings("scheduled");
-    const recording = await api.listRecordings("recording");
-    recordings.value = [...recording, ...scheduled];
-  } catch (error) {
-    console.error("Failed to load schedule:", error);
+    error.value = null;
+    const all = await api.listRecordings();
+    recordings.value = all;
+  } catch (err) {
+    console.error("Failed to load schedule:", err);
+    error.value =
+      err instanceof Error ? err.message : "Failed to load recordings";
   }
 });
 
-function handleAddRecording(): void {
-  // Form submission will be wired by next agent
-  console.log("Add recording:", form);
+async function handleAddRecording(): Promise<void> {
+  try {
+    error.value = null;
+    if (!form.url || !form.title || !form.start || !form.stop) {
+      error.value = "All fields are required";
+      return;
+    }
+
+    const startDate = new Date(form.start);
+    const stopDate = new Date(form.stop);
+
+    const newRecording = await api.createRecording({
+      url: form.url,
+      title: form.title,
+      quality: form.quality,
+      start_at: startDate.toISOString(),
+      stop_at: stopDate.toISOString(),
+    });
+
+    recordings.value.unshift(newRecording as unknown as Recording);
+    form.url = "";
+    form.title = "";
+    form.quality = "1080p";
+    form.start = "";
+    form.stop = "";
+  } catch (err) {
+    console.error("Failed to create recording:", err);
+    error.value =
+      err instanceof Error ? err.message : "Failed to create recording";
+  }
+}
+
+async function handleCancel(id: string): Promise<void> {
+  try {
+    error.value = null;
+    await api.cancelRecording(id);
+    recordings.value = recordings.value.filter((rec) => rec.id !== id);
+  } catch (err) {
+    console.error("Failed to cancel recording:", err);
+    error.value =
+      err instanceof Error ? err.message : "Failed to cancel recording";
+  }
+}
+
+async function handleStartNow(id: string): Promise<void> {
+  try {
+    error.value = null;
+    await api.patchRecording(id, {
+      start_at: new Date().toISOString(),
+    });
+    const idx = recordings.value.findIndex((rec) => rec.id === id);
+    if (idx >= 0) {
+      recordings.value[idx].status = "recording";
+    }
+  } catch (err) {
+    console.error("Failed to start recording:", err);
+    error.value =
+      err instanceof Error ? err.message : "Failed to start recording";
+  }
+}
+
+async function handleStopEarly(id: string): Promise<void> {
+  try {
+    error.value = null;
+    await api.patchRecording(id, {
+      stop_at: new Date().toISOString(),
+    });
+    const idx = recordings.value.findIndex((rec) => rec.id === id);
+    if (idx >= 0) {
+      recordings.value[idx].status = "recorded";
+    }
+  } catch (err) {
+    console.error("Failed to stop recording:", err);
+    error.value =
+      err instanceof Error ? err.message : "Failed to stop recording";
+  }
+}
+
+function toLocalDatetimeInputValue(isoString: string): string {
+  const date = new Date(isoString);
+  const offsetMs = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function startEdit(rec: Recording): void {
+  editingId.value = rec.id;
+  editForm.title = rec.title;
+  editForm.start = toLocalDatetimeInputValue(rec.startAt);
+  editForm.stop = toLocalDatetimeInputValue(rec.stopAt);
+}
+
+async function saveEdit(id: string): Promise<void> {
+  try {
+    error.value = null;
+    const startDate = new Date(editForm.start);
+    const stopDate = new Date(editForm.stop);
+
+    await api.patchRecording(id, {
+      title: editForm.title,
+      start_at: startDate.toISOString(),
+      stop_at: stopDate.toISOString(),
+    });
+
+    const idx = recordings.value.findIndex((rec) => rec.id === id);
+    if (idx >= 0) {
+      recordings.value[idx].title = editForm.title;
+      recordings.value[idx].startAt = startDate.toISOString();
+      recordings.value[idx].stopAt = stopDate.toISOString();
+    }
+
+    editingId.value = null;
+  } catch (err) {
+    console.error("Failed to update recording:", err);
+    error.value =
+      err instanceof Error ? err.message : "Failed to update recording";
+  }
+}
+
+function cancelEdit(): void {
+  editingId.value = null;
 }
 
 function formatTimeInfo(rec: Recording): string {
-  // Placeholder formatting - will be replaced with real data
+  const start = new Date(rec.startAt);
+  const stop = new Date(rec.stopAt);
+  const now = new Date();
+
   if (rec.status === "recording") {
-    return "01:12:38 recorded · ends ~23:45";
+    const elapsed = Math.floor((now.getTime() - start.getTime()) / 1000);
+    const elapsedHours = Math.floor(elapsed / 3600);
+    const elapsedMins = Math.floor((elapsed % 3600) / 60);
+    const elapsedSecs = Math.floor(elapsed % 60);
+    const endTime = stop.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    return `${elapsedHours}:${String(elapsedMins).padStart(2, "0")}:${String(elapsedSecs).padStart(2, "0")} recorded · ends ~${endTime}`;
   }
-  return "Tonight 21:30 → 23:45 · in 2h 4m";
+
+  const timeUntil = Math.floor((start.getTime() - now.getTime()) / 1000);
+  if (timeUntil < 0) {
+    return "Starting soon...";
+  }
+  const hoursUntil = Math.floor(timeUntil / 3600);
+  const minsUntil = Math.floor((timeUntil % 3600) / 60);
+  const startTime = start.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  const endTime = stop.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return `${startTime} → ${endTime} · in ${hoursUntil}h ${minsUntil}m`;
 }
 </script>
 
@@ -540,6 +725,43 @@ function formatTimeInfo(rec: Recording): string {
   color: var(--ink-soft);
   font-style: italic;
   padding: 2rem;
+}
+
+.error-message {
+  background: var(--paper-2);
+  border: 2px solid var(--fluoro);
+  color: var(--fluoro);
+  padding: 12px;
+  margin-bottom: 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+}
+
+.slot__edit {
+  display: grid;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.edit-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.edit-field label {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+}
+
+.edit-field .input {
+  font-size: 13px;
+  padding: 8px 10px;
 }
 
 @keyframes pulse {

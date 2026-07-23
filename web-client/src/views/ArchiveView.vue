@@ -24,11 +24,16 @@ import RecordingList from "../components/RecordingList.vue";
 interface Recording {
   id: string;
   title: string;
-  stage?: string;
-  event?: string;
-  duration?: string;
-  quality?: string;
-  recorded_at?: string;
+  stage: string | null;
+  quality: string;
+  startAt: string;
+  stopAt: string;
+  status: string;
+  url: string;
+  cookieId: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 defineProps<{

@@ -9,17 +9,17 @@
         @click.prevent="$emit('select', recording.id)"
       >
         <div class="stub-index">
-          <span class="stg">{{ recording.stage || "N/A" }}<small>{{ stageSubtext }}</small></span>
+          <span class="stg">{{ recording.stage || "Stage" }}<small>{{ stageSubtext }}</small></span>
         </div>
         <div class="stub-body">
           <div class="stub-meta">
-            <span>{{ recording.event || "Event" }}</span>
-            <span>·</span>
-            <span>{{ formatDate(recording.recorded_at || recording.start_at) }}</span>
+            <span v-if="extractFestival(recording.title)">{{ extractFestival(recording.title) }}</span>
+            <span v-if="extractFestival(recording.title)">·</span>
+            <span>{{ formatDate(recording.startAt) }}</span>
           </div>
           <div class="stub-title">{{ recording.title }}</div>
           <div class="stub-foot">
-            <span class="dur">{{ formatDuration(recording.duration) }}</span>
+            <span class="dur">{{ computeDuration(recording.startAt, recording.stopAt) }}</span>
             <span class="chip" :class="{ 'chip--hd': isHd(recording.quality) }">{{ recording.quality || "n/a" }}</span>
             <span class="arrow">→</span>
           </div>
@@ -38,12 +38,16 @@ import { computed } from "vue";
 interface Recording {
   id: string;
   title: string;
-  stage?: string;
-  event?: string;
-  duration?: string | number;
-  quality?: string;
-  recorded_at?: string;
-  start_at?: string;
+  stage: string | null;
+  quality: string;
+  startAt: string;
+  stopAt: string;
+  status: string;
+  url: string;
+  cookieId: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 const props = withDefaults(
@@ -62,23 +66,33 @@ defineEmits<{
   select: [id: string];
 }>();
 
-function formatDate(dateStr?: string): string {
-  if (!dateStr) return "N/A";
+function extractFestival(title: string): string | null {
+  const parts = title.split(" - ");
+  if (parts.length === 3) {
+    return parts[2].trim();
+  }
+  return null;
+}
+
+function formatDate(dateStr: string): string {
   const date = new Date(dateStr);
   return date.toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
-function formatDuration(duration?: string | number): string {
-  if (!duration) return "—";
-  if (typeof duration === "string") return duration;
-  const hours = Math.floor(duration / 3600);
-  const minutes = Math.floor((duration % 3600) / 60);
-  const seconds = Math.floor(duration % 60);
+function computeDuration(startAt: string, stopAt: string): string {
+  const start = new Date(startAt).getTime();
+  const stop = new Date(stopAt).getTime();
+  const diffMs = stop - start;
+  if (diffMs <= 0) return "—";
+
+  const diffSec = Math.floor(diffMs / 1000);
+  const hours = Math.floor(diffSec / 3600);
+  const minutes = Math.floor((diffSec % 3600) / 60);
+  const seconds = Math.floor(diffSec % 60);
   return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function isHd(quality?: string): boolean {
-  if (!quality) return false;
+function isHd(quality: string): boolean {
   return quality.includes("1080");
 }
 </script>

@@ -2,12 +2,15 @@ interface Recording {
   id: string;
   url: string;
   title: string;
-  status: string;
-  start_at: string;
-  stop_at: string;
+  stage: string | null;
+  cookieId: string | null;
   quality: string;
-  ts_path?: string;
-  final_path?: string;
+  startAt: string;
+  stopAt: string;
+  status: string;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface ApiError {
