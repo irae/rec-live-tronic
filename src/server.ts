@@ -64,7 +64,7 @@ export async function startServer(config: Config = loadConfig(), nodeVersion = p
   };
 
   const recorder = new RecorderService(new RecordingRepository(database), new CookieRepository(database), config, new UserSystemdClient());
-  const publicServer = createServer(createApp({ health, recorder }));
+  const publicServer = createServer(createApp({ health, recorder, config }));
   const privateServer = createServer(createApp({ health, recorder, privateApi: true }));
   try {
     await rm(config.privateSocketPath, { force: true });
@@ -78,10 +78,18 @@ export async function startServer(config: Config = loadConfig(), nodeVersion = p
     throw error;
   }
 
+  await recorder.autoSweepTrash();
+  const dailySweepInterval = setInterval(() => {
+    recorder.autoSweepTrash().catch((error: unknown) => {
+      console.error("Auto-sweep trash failed:", error);
+    });
+  }, 24 * 60 * 60 * 1000);
+
   return {
     publicServer,
     privateServer,
     async close(): Promise<void> {
+      clearInterval(dailySweepInterval);
       await Promise.all([close(publicServer), close(privateServer)]);
       database.close();
       await rm(config.privateSocketPath, { force: true });

@@ -153,11 +153,20 @@ export class RecordingRepository {
     return row === undefined ? undefined : mapRecording(row);
   }
 
-  list(filters: { status?: RecordingStatus } = {}): Recording[] {
+  list(filters: { status?: RecordingStatus; trashed?: boolean } = {}): Recording[] {
     if (filters.status !== undefined) assertStatus(filters.status);
-    const rows = filters.status === undefined
-      ? this.database.prepare(`${selectColumns} ORDER BY recordings.created_at DESC`).all()
-      : this.database.prepare(`${selectColumns} WHERE recordings.status = ? ORDER BY recordings.created_at DESC`).all(filters.status);
+    let whereClause = "";
+    const params: Array<string | null> = [];
+    if (filters.trashed === true) {
+      whereClause = " WHERE recordings.trashed_at IS NOT NULL";
+    } else if (filters.trashed === false || filters.trashed === undefined) {
+      whereClause = " WHERE recordings.trashed_at IS NULL";
+    }
+    if (filters.status !== undefined) {
+      whereClause += (whereClause ? " AND" : " WHERE") + " recordings.status = ?";
+      params.push(filters.status);
+    }
+    const rows = this.database.prepare(`${selectColumns}${whereClause} ORDER BY ${filters.trashed === true ? "recordings.trashed_at DESC" : "recordings.created_at DESC"}`).all(...params);
     return (rows as RecordingRow[]).map(mapRecording);
   }
 
@@ -272,6 +281,42 @@ export class RecordingRepository {
       if (existing === undefined) throw new Error(`Recording ${id} not found`);
       this.database.prepare("DELETE FROM recordings WHERE id = ?").run(id);
     })();
+  }
+
+  trash(id: string, now?: UtcInstant): MutationResult<Recording> {
+    return this.database.transaction((): MutationResult<Recording> => {
+      if (this.getById(id) === undefined) return { outcome: "not_found" };
+      const trashedAt = timestamp(now, "now");
+      this.database.prepare("UPDATE recordings SET trashed_at = ?, updated_at = ?, version = version + 1 WHERE id = ?")
+        .run(trashedAt, trashedAt, id);
+      return { outcome: "updated", value: this.getRequired(id) };
+    })();
+  }
+
+  restore(id: string, now?: UtcInstant): MutationResult<Recording> {
+    return this.database.transaction((): MutationResult<Recording> => {
+      const existing = this.getById(id);
+      if (existing === undefined) return { outcome: "not_found" };
+      if (existing.trashedAt === null) return { outcome: "conflict" };
+      const updatedAt = timestamp(now, "now");
+      this.database.prepare("UPDATE recordings SET trashed_at = NULL, updated_at = ?, version = version + 1 WHERE id = ?")
+        .run(updatedAt, id);
+      return { outcome: "updated", value: this.getRequired(id) };
+    })();
+  }
+
+  purge(id: string, tsPath: string): void {
+    this.database.transaction(() => {
+      const existing = this.getById(id);
+      if (existing === undefined) throw new Error(`Recording ${id} not found`);
+      this.database.prepare("DELETE FROM recordings WHERE id = ?").run(id);
+    })();
+  }
+
+  listTrashedOlderThan(millisecondsSinceEpoch: number): Recording[] {
+    const rows = this.database.prepare(`${selectColumns} WHERE recordings.trashed_at IS NOT NULL AND recordings.trashed_at < ? ORDER BY recordings.trashed_at ASC`)
+      .all(millisecondsSinceEpoch);
+    return (rows as RecordingRow[]).map(mapRecording);
   }
 
   private listByWindow(status: RecordingStatus, now: UtcInstant, predicate: string): Recording[] {

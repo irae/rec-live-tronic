@@ -3,7 +3,9 @@ import express from "express";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { statfs } from "node:fs/promises";
 import type { RecorderService } from "./api/service.js";
+import type { Config } from "./config.js";
 
 export class AppError extends Error {
   readonly code: string;
@@ -29,6 +31,7 @@ export interface HealthReport {
 export interface AppDependencies {
   health: () => Promise<HealthReport>;
   recorder?: RecorderService;
+  config?: Config;
   privateApi?: boolean;
 }
 
@@ -65,7 +68,7 @@ export function createApp(deps: AppDependencies): express.Express {
     }
   });
 
-  if (deps.recorder && !deps.privateApi) addPublicRoutes(app, deps.recorder);
+  if (deps.recorder && !deps.privateApi) addPublicRoutes(app, deps.recorder, deps.config);
   if (deps.recorder && deps.privateApi) addPrivateRoutes(app, deps.recorder);
 
   if (!deps.privateApi) {
@@ -84,13 +87,30 @@ export function createApp(deps: AppDependencies): express.Express {
   return app;
 }
 
-function addPublicRoutes(app: express.Express, recorder: RecorderService): void {
+function addPublicRoutes(app: express.Express, recorder: RecorderService, config?: Config): void {
   const json = express.json({ limit: "32kb" });
   app.post("/recordings", json, async (request, response, next) => {
     try { response.status(201).json({ recording: await recorder.createRecording(request.body) }); } catch (error) { next(error); }
   });
-  app.get("/recordings", (request, response, next) => {
-    try { response.json({ recordings: recorder.listRecordings(request.query.status) }); } catch (error) { next(error); }
+  app.get("/recordings", async (request, response, next) => {
+    try {
+      const trashed = request.query.trashed === "true" ? true : undefined;
+      const recordings = trashed !== undefined
+        ? recorder.listRecordings(undefined, { trashed })
+        : recorder.listRecordings(request.query.status);
+      const result: { recordings: unknown; disk?: { actual_bytes: number; projected_bytes: number } } = { recordings };
+      if (config) {
+        try {
+          const stats = await statfs(config.recordingsDir);
+          const actualBytes = stats.bavail * stats.bsize;
+          const recordingBytes = await recorder.getInProgressBytes();
+          result.disk = { actual_bytes: actualBytes, projected_bytes: Math.max(0, actualBytes - recordingBytes) };
+        } catch (error) {
+          console.error("Failed to compute disk space:", error);
+        }
+      }
+      response.json(result);
+    } catch (error) { next(error); }
   });
   app.get("/recordings/:id", (request, response, next) => {
     try { response.json({ recording: recorder.getRecording(request.params.id) }); } catch (error) { next(error); }
@@ -117,7 +137,13 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService): void 
     } catch (error) { next(error); }
   });
   app.delete("/recordings/:id/file", async (request, response, next) => {
-    try { await recorder.deleteRecording(request.params.id); response.status(204).end(); } catch (error) { next(error); }
+    try { await recorder.trashRecording(request.params.id); response.status(204).end(); } catch (error) { next(error); }
+  });
+  app.post("/recordings/:id/restore", async (request, response, next) => {
+    try { response.json({ recording: await recorder.restoreRecording(request.params.id) }); } catch (error) { next(error); }
+  });
+  app.delete("/recordings/:id/trash", async (request, response, next) => {
+    try { await recorder.permanentDeleteRecording(request.params.id); response.status(204).end(); } catch (error) { next(error); }
   });
 
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });

@@ -186,7 +186,7 @@ t.test("returns 409 for a recording that is still scheduled", async (t) => {
   t.equal(body.error.code, "STATUS_CONFLICT");
 });
 
-t.test("deletes a finished recording's file and row on explicit request", async (t) => {
+t.test("moves a finished recording to trash instead of purging it", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");
   if (!address || typeof address === "string") return;
@@ -219,10 +219,14 @@ t.test("deletes a finished recording's file and row on explicit request", async 
     expected_version: recordingBody.recording.version,
     status: "recorded",
   });
-  const deleteResponse = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
-  t.equal(deleteResponse.status, 204);
-  const getAfterDelete = await fetch(`${base}/recordings/${id}`);
-  t.equal(getAfterDelete.status, 404);
+  const trashResponse = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  t.equal(trashResponse.status, 204);
+  const getAfterTrash = await fetch(`${base}/recordings/${id}`);
+  t.equal(getAfterTrash.status, 200);
+  const afterTrashBody = await getAfterTrash.json() as { recording: { trashedAt: string | null } };
+  t.ok(afterTrashBody.recording.trashedAt !== null);
+  const { existsSync } = await import("node:fs");
+  t.equal(existsSync(filePath), true);
 });
 
 t.test("rejects deleting a recording that is not finished", async (t) => {
@@ -250,7 +254,7 @@ t.test("rejects deleting a recording that is not finished", async (t) => {
   t.equal(getAfterDelete.status, 200);
 });
 
-t.test("leaves no dangling row and no orphaned file after a delete", async (t) => {
+t.test("leaves no dangling row and no orphaned file after a permanent delete", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");
   if (!address || typeof address === "string") return;
@@ -282,10 +286,289 @@ t.test("leaves no dangling row and no orphaned file after a delete", async (t) =
     expected_version: recordingBody.recording.version,
     status: "recorded",
   });
-  const deleteResponse = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  const deleteResponse = await fetch(`${base}/recordings/${id}/trash`, { method: "DELETE" });
   t.equal(deleteResponse.status, 204);
   const getAfterDelete = await fetch(`${base}/recordings/${id}`);
   t.equal(getAfterDelete.status, 404);
   const { existsSync } = await import("node:fs");
   t.equal(existsSync(filePath), false);
+});
+
+t.test("excludes trashed recordings from the default and status-filtered listings", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=trash-filter-1",
+      title: "trash filter 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  await writeFile(join(root, "recordings", `${id}.ts`), "test content");
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  const defaultList = await fetch(`${base}/recordings`);
+  const defaultBody = await defaultList.json() as { recordings: { id: string }[] };
+  const idsInDefault = defaultBody.recordings.map((r) => r.id);
+  t.notOk(idsInDefault.includes(id));
+  const statusList = await fetch(`${base}/recordings?status=recorded`);
+  const statusBody = await statusList.json() as { recordings: { id: string }[] };
+  const idsInStatus = statusBody.recordings.map((r) => r.id);
+  t.notOk(idsInStatus.includes(id));
+});
+
+t.test("lists only trashed recordings via ?trashed=true", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=trash-list-1",
+      title: "trash list 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  await writeFile(join(root, "recordings", `${id}.ts`), "test content");
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  const trashedList = await fetch(`${base}/recordings?trashed=true`);
+  const trashedBody = await trashedList.json() as { recordings: { id: string }[] };
+  const idsInTrash = trashedBody.recordings.map((r) => r.id);
+  t.ok(idsInTrash.includes(id));
+});
+
+t.test("restores a trashed recording back into the archive listing", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=restore-1",
+      title: "restore 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  await writeFile(join(root, "recordings", `${id}.ts`), "test content");
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  const restoreResponse = await fetch(`${base}/recordings/${id}/restore`, { method: "POST" });
+  t.equal(restoreResponse.status, 200);
+  const restoreBody = await restoreResponse.json() as { recording: { trashedAt: string | null } };
+  t.equal(restoreBody.recording.trashedAt, null);
+  const defaultList = await fetch(`${base}/recordings`);
+  const defaultBody = await defaultList.json() as { recordings: { id: string }[] };
+  const idsInDefault = defaultBody.recordings.map((r) => r.id);
+  t.ok(idsInDefault.includes(id));
+});
+
+t.test("rejects restoring a recording that is not in trash", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=restore-reject-1",
+      title: "restore reject 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string } };
+  const id = createdBody.recording.id;
+  const restoreResponse = await fetch(`${base}/recordings/${id}/restore`, { method: "POST" });
+  t.equal(restoreResponse.status, 409);
+});
+
+t.test("permanently deletes a trashed recording's file and row", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=perm-delete-1",
+      title: "perm delete 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  const filePath = join(root, "recordings", `${id}.ts`);
+  await writeFile(filePath, "test content");
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  const permanentResponse = await fetch(`${base}/recordings/${id}/trash`, { method: "DELETE" });
+  t.equal(permanentResponse.status, 204);
+  const getAfterPermanent = await fetch(`${base}/recordings/${id}`);
+  t.equal(getAfterPermanent.status, 404);
+  const { existsSync } = await import("node:fs");
+  t.equal(existsSync(filePath), false);
+});
+
+t.test("rejects permanent delete of a recording that is not in trash", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=perm-delete-reject-1",
+      title: "perm delete reject 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  await writeFile(join(root, "recordings", `${id}.ts`), "test content");
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  const permanentResponse = await fetch(`${base}/recordings/${id}/trash`, { method: "DELETE" });
+  t.equal(permanentResponse.status, 409);
+});
+
+t.test("rejects trashing a recording that is not finished", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=trash-reject-1",
+      title: "trash reject 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string } };
+  const id = createdBody.recording.id;
+  const trashResponse = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  t.equal(trashResponse.status, 409);
+});
+
+t.test("excludes trashed recordings from status-filtered listings", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=status-filter-trash",
+      title: "status filter trash",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  await writeFile(join(root, "recordings", `${id}.ts`), "test content");
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  const recordedList = await fetch(`${base}/recordings?status=recorded`);
+  const recordedBody = await recordedList.json() as { recordings: { id: string }[] };
+  const idsInRecorded = recordedBody.recordings.map((r) => r.id);
+  t.notOk(idsInRecorded.includes(id));
 });

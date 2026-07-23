@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { unlink } from "node:fs/promises";
+import { stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { CookieRepository, type CookieMetadata } from "../cookies/repository.js";
 import { toUnixMilliseconds } from "../db/instants.js";
@@ -100,8 +100,17 @@ export class RecorderService {
     return mapRecording(this.recordings.create({ id, url, title, stage, cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
   }
 
-  listRecordings(status?: unknown): ReturnType<typeof mapRecording>[] {
-    return this.recordings.list(status === undefined ? {} : { status: requireStatus(status) }).map(mapRecording);
+  listRecordings(status?: unknown, filters?: { trashed?: boolean }): ReturnType<typeof mapRecording>[] {
+    if (status !== undefined && filters?.trashed !== undefined) {
+      return this.recordings.list({ status: requireStatus(status), trashed: filters.trashed }).map(mapRecording);
+    }
+    if (status !== undefined) {
+      return this.recordings.list({ status: requireStatus(status) }).map(mapRecording);
+    }
+    if (filters?.trashed !== undefined) {
+      return this.recordings.list({ trashed: filters.trashed }).map(mapRecording);
+    }
+    return this.recordings.list({}).map(mapRecording);
   }
 
   getRecording(id: string): ReturnType<typeof mapRecording> {
@@ -210,6 +219,72 @@ export class RecorderService {
       }
     }
     this.recordings.delete(id);
+  }
+
+  async trashRecording(id: string): Promise<void> {
+    const recording = this.recordings.getById(id);
+    if (!recording) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    if (recording.status !== "recorded") {
+      throw new AppError("STATUS_CONFLICT", 409, "Only finished recordings can be trashed");
+    }
+    const result = this.recordings.trash(id);
+    if (result.outcome === "not_found") throw new AppError("NOT_FOUND", 404, "Recording not found");
+  }
+
+  async restoreRecording(id: string): Promise<ReturnType<typeof mapRecording>> {
+    const existing = this.recordings.getById(id);
+    if (!existing) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    if (existing.trashedAt === null) throw new AppError("STATUS_CONFLICT", 409, "Recording is not in trash");
+    const result = this.recordings.restore(id);
+    if (result.outcome === "not_found") throw new AppError("NOT_FOUND", 404, "Recording not found");
+    if (result.outcome === "conflict") throw new AppError("STATUS_CONFLICT", 409, "Recording is not in trash");
+    return mapRecording(result.value);
+  }
+
+  async permanentDeleteRecording(id: string): Promise<void> {
+    const recording = this.recordings.getById(id);
+    if (!recording) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    if (recording.trashedAt === null) throw new AppError("STATUS_CONFLICT", 409, "Only trashed recordings can be permanently deleted");
+    try {
+      await unlink(recording.tsPath);
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        // File already missing, continue to delete row
+      } else {
+        console.error(`Failed to unlink recording file for ${id} (${recording.tsPath}):`, error);
+        throw new AppError("FILE_DELETE_ERROR", 500, "Failed to delete recording file");
+      }
+    }
+    this.recordings.purge(id, recording.tsPath);
+  }
+
+  async getInProgressBytes(): Promise<number> {
+    const inProgress = this.recordings.list({ status: "recording" });
+    const sizes = await Promise.all(inProgress.map(async (recording) => {
+      try {
+        return (await stat(recording.tsPath)).size;
+      } catch {
+        return 0;
+      }
+    }));
+    return sizes.reduce((sum, size) => sum + size, 0);
+  }
+
+  async autoSweepTrash(thirtyDaysMs: number = 30 * 24 * 60 * 60 * 1000): Promise<void> {
+    const threshold = Date.now() - thirtyDaysMs;
+    const toDelete = this.recordings.listTrashedOlderThan(threshold);
+    for (const recording of toDelete) {
+      try {
+        await unlink(recording.tsPath);
+      } catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+          // File already missing, continue to delete row
+        } else {
+          console.error(`Failed to unlink recording file during auto-sweep for ${recording.id} (${recording.tsPath}):`, error);
+        }
+      }
+      this.recordings.purge(recording.id, recording.tsPath);
+    }
   }
 
   transition(input: { id: string; expected_status: unknown; expected_version: unknown; status: unknown; last_started_boot_id?: unknown; last_started_stop_at?: unknown }): ReturnType<typeof mapRecording> {
