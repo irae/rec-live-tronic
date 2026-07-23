@@ -17,6 +17,7 @@ export interface Recording {
   id: string;
   url: string;
   title: string;
+  stage: string | null;
   cookieId: string | null;
   cookiePath: string | null;
   quality: string;
@@ -36,6 +37,7 @@ export interface CreateRecordingInput {
   id: string;
   url: string;
   title: string;
+  stage?: string | null;
   cookieId?: string | null;
   quality: string;
   startAt: UtcInstant;
@@ -69,6 +71,7 @@ interface RecordingRow {
   id: string;
   url: string;
   title: string;
+  stage: string | null;
   cookie_id: string | null;
   cookie_path: string | null;
   quality: string;
@@ -85,7 +88,7 @@ interface RecordingRow {
 }
 
 const selectColumns = `
-  SELECT recordings.id, recordings.url, recordings.title, recordings.cookie_id, cookies.path AS cookie_path,
+  SELECT recordings.id, recordings.url, recordings.title, recordings.stage, recordings.cookie_id, cookies.path AS cookie_path,
          recordings.quality, recordings.start_at, recordings.stop_at, recordings.status, recordings.unit_name,
          recordings.ts_path, recordings.last_started_boot_id, recordings.last_started_stop_at, recordings.version, recordings.created_at, recordings.updated_at
   FROM recordings LEFT JOIN cookies ON cookies.id = recordings.cookie_id`;
@@ -108,6 +111,7 @@ function mapRecording(row: RecordingRow): Recording {
     id: row.id,
     url: row.url,
     title: row.title,
+    stage: row.stage,
     cookieId: row.cookie_id,
     cookiePath: row.cookie_path,
     quality: row.quality,
@@ -134,9 +138,9 @@ export class RecordingRepository {
     const now = timestamp(input.now, "now");
     return this.database.transaction(() => {
       this.database.prepare(`INSERT INTO recordings
-        (id, url, title, cookie_id, quality, start_at, stop_at, status, unit_name, ts_path, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`)
-        .run(input.id, input.url, input.title, input.cookieId ?? null, input.quality, startAt, stopAt, input.unitName, input.tsPath, now, now);
+        (id, url, title, stage, cookie_id, quality, start_at, stop_at, status, unit_name, ts_path, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`)
+        .run(input.id, input.url, input.title, input.stage ?? null, input.cookieId ?? null, input.quality, startAt, stopAt, input.unitName, input.tsPath, now, now);
       return this.getRequired(input.id);
     })();
   }

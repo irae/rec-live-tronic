@@ -347,6 +347,21 @@ the owner selects at the prototype gate (step 2), served as static files by the
 existing `web` Express service. One new backend behaviour only: a hard delete
 that removes both the file and its SQLite row (see below).
 
+**Stage label (decision).** The design prototype invented a "stage" badge with no
+backing field. Rather than hardcode the prototype's three fixed values, `stage`
+is a real **optional** `TEXT` column (`migrations/003-recording-stage.sql`),
+nullable so older rows simply have none, and it round-trips through the existing
+`GET /recordings` and `GET /recordings/:id` responses. It is populated once at
+creation in `RecorderService.createRecording`: if `title` matches the
+`"Artist - Stage - Festival"` three-part `" - "` convention the middle segment is
+used; otherwise a best-effort YouTube oEmbed lookup (`REC_LIVE_OEMBED_ENDPOINT`,
+`author_name`) approximates it with the channel name. That network call has a
+short timeout and never blocks or fails creation — `stage` stays null on any
+error. The endpoint is config (like `REC_LIVE_STREAMLINK_BIN`) so functional
+tests point it off-network. Chosen over deriving on every read (the value is
+stable, so store it once) and over a general metadata system (out of proportion
+to this app).
+
 **Dependencies (decision).** Build the client with **Vue 3** (runtime dependency
 `vue`) and **Vite** (dev-only build tool `vite` + `@vitejs/plugin-vue`), using
 Single-File Components (`.vue` files carrying template/script/style together) and

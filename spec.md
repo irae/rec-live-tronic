@@ -82,7 +82,7 @@ Reconciler tick responsibilities:
 
 ## Data model (fields, not schema)
 
-- **recordings**: `id`, `url`, `title`, `cookie_id?`, `quality` (default `best`), `start_at`, `stop_at`, `status`, `unit_name`, `ts_path`, `final_path?`, `created_at`, `updated_at`.
+- **recordings**: `id`, `url`, `title`, `stage?` (optional label, derived at creation — see plan.md Phase 2), `cookie_id?`, `quality` (default `best`), `start_at`, `stop_at`, `status`, `unit_name`, `ts_path`, `final_path?`, `created_at`, `updated_at`.
   - status: `scheduled → recording → recorded → muxed` plus `cancelled | failed | missed`.
 - **cookies**: `id`, `name`, `path`, `updated_at`. Multiple named cookie files → different accounts for parallel recordings.
 - **candidates**: `id`, `source`, `title`, `url`, `suggested_start`, `suggested_stop`, `imported_at`, `promoted_recording_id?`. A candidate is an un-scheduled suggestion; promoting one creates a `recordings` row.

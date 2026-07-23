@@ -34,6 +34,27 @@ function quality(value: unknown): string {
 function recordingId(): string { return `rec-${randomUUID().replaceAll("-", "")}`; }
 function cookieId(): string { return `cookie-${randomUUID().replaceAll("-", "")}`; }
 
+function stageFromTitle(title: string): string | null {
+  const parts = title.split(" - ").map((part) => part.trim());
+  if (parts.length !== 3 || parts.some((part) => part === "")) return null;
+  return parts[1] ?? null;
+}
+
+// Best-effort YouTube channel name via the public oEmbed endpoint; the stage
+// column stays null on any failure so recording creation never depends on this
+// network call. The endpoint is config so functional tests point it off-network.
+async function stageFromChannel(endpoint: string, url: string): Promise<string | null> {
+  try {
+    const response = await fetch(`${endpoint}?url=${encodeURIComponent(url)}&format=json`, { signal: AbortSignal.timeout(2_500) });
+    if (!response.ok) return null;
+    const author = (await response.json() as { author_name?: unknown }).author_name;
+    if (typeof author !== "string" || !author.trim()) return null;
+    return author.trim().slice(0, 200);
+  } catch {
+    return null;
+  }
+}
+
 function validateUrl(value: unknown): string {
   const url = text(value, "url", 2_000);
   let parsed: URL;
@@ -62,7 +83,7 @@ export class RecorderService {
     private readonly systemd: SystemdClient,
   ) {}
 
-  createRecording(input: RecordingInput): ReturnType<typeof mapRecording> {
+  async createRecording(input: RecordingInput): Promise<ReturnType<typeof mapRecording>> {
     const startAt = instant(input.start_at, "start_at");
     const stopAt = instant(input.stop_at, "stop_at");
     if (toUnixMilliseconds(startAt, "start_at") >= toUnixMilliseconds(stopAt, "stop_at")) throw new AppError("VALIDATION_ERROR", 400, "start_at must be before stop_at");
@@ -73,7 +94,10 @@ export class RecorderService {
     }
     const qualityValue = input.quality === undefined ? "best" : quality(input.quality);
     const id = recordingId();
-    return mapRecording(this.recordings.create({ id, url: validateUrl(input.url), title: text(input.title, "title"), cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
+    const title = text(input.title, "title");
+    const url = validateUrl(input.url);
+    const stage = stageFromTitle(title) ?? await stageFromChannel(this.config.oembedEndpoint, url);
+    return mapRecording(this.recordings.create({ id, url, title, stage, cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
   }
 
   listRecordings(status?: unknown): ReturnType<typeof mapRecording>[] {

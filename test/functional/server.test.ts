@@ -21,6 +21,7 @@ t.before(async () => {
     REC_LIVE_RECORDINGS_DIR: join(root, "recordings"),
     REC_LIVE_PRIVATE_SOCKET: join(root, "run", "api.sock"),
     REC_LIVE_STREAMLINK_BIN: streamlink,
+    REC_LIVE_OEMBED_ENDPOINT: "http://127.0.0.1:1/oembed",
   }), "24.0.0");
 });
 
@@ -141,6 +142,26 @@ t.test("404s a recording that does not exist", async (t) => {
   t.equal(fileResponse.status, 404);
   const body = await fileResponse.json() as { error: { code: string } };
   t.equal(body.error.code, "NOT_FOUND");
+});
+
+t.test("derives stage from a three-part title and leaves it null otherwise", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  async function schedule(title: string): Promise<string | null> {
+    const created = await fetch(`${base}/recordings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://www.youtube.com/watch?v=phase03", title, start_at: "2099-01-01T00:00:00Z", stop_at: "2099-01-01T01:00:00Z" }),
+    });
+    t.equal(created.status, 201);
+    return (await created.json() as { recording: { stage: string | null } }).recording.stage;
+  }
+  // Middle segment of the "Artist - Stage - Festival" convention.
+  t.equal(await schedule("Artist - Main Stage - Festival"), "Main Stage");
+  // No convention match and the oEmbed endpoint is unreachable in tests.
+  t.equal(await schedule("just a freeform title"), null);
 });
 
 t.test("returns 409 for a recording that is still scheduled", async (t) => {

@@ -86,7 +86,7 @@ export function createApp(deps: AppDependencies): express.Express {
 function addPublicRoutes(app: express.Express, recorder: RecorderService): void {
   const json = express.json({ limit: "32kb" });
   app.post("/recordings", json, async (request, response, next) => {
-    try { response.status(201).json({ recording: recorder.createRecording(request.body) }); } catch (error) { next(error); }
+    try { response.status(201).json({ recording: await recorder.createRecording(request.body) }); } catch (error) { next(error); }
   });
   app.get("/recordings", (request, response, next) => {
     try { response.json({ recordings: recorder.listRecordings(request.query.status) }); } catch (error) { next(error); }

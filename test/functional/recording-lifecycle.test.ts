@@ -53,7 +53,7 @@ t.before(async () => {
   const streamlink = join(root, "streamlink");
   await writeFile(streamlink, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   await chmod(streamlink, 0o755);
-  config = loadConfig({ REC_LIVE_HOST: "127.0.0.1", REC_LIVE_PORT: "0", REC_LIVE_DATA_DIR: join(root, "state"), REC_LIVE_RECORDINGS_DIR: join(root, "recordings"), REC_LIVE_PRIVATE_SOCKET: join(root, "run", "api.sock"), REC_LIVE_STREAMLINK_BIN: streamlink });
+  config = loadConfig({ REC_LIVE_HOST: "127.0.0.1", REC_LIVE_PORT: "0", REC_LIVE_DATA_DIR: join(root, "state"), REC_LIVE_RECORDINGS_DIR: join(root, "recordings"), REC_LIVE_PRIVATE_SOCKET: join(root, "run", "api.sock"), REC_LIVE_STREAMLINK_BIN: streamlink, REC_LIVE_OEMBED_ENDPOINT: "http://127.0.0.1:1/oembed" });
   running = await startServer(config, "24.0.0");
   recordings = new RecordingRepository(openDatabase(config.databasePath));
   systemd = new SystemdStub();
