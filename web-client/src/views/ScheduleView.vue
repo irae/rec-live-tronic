@@ -119,7 +119,7 @@
               <div class="slot__top">
                 <div>
                   <div class="slot__title">{{ rec.title }}</div>
-                  <div class="slot__meta">{{ rec.stage || "Stage" }} · {{ rec.quality || "n/a" }}</div>
+                  <div class="slot__meta">{{ rec.stage || "Stage" }} · {{ rec.quality || "n/a" }}<template v-if="rec.url"> · <a :href="rec.url" target="_blank" rel="noopener noreferrer" class="slot__watch">Watch live ↗</a></template></div>
                 </div>
                 <span v-if="rec.status === 'recording'" class="state state--live">
                   <span class="blip"></span>Rec
@@ -707,6 +707,16 @@ function formatTimeInfo(rec: Recording): string {
   letter-spacing: .1em;
   text-transform: uppercase;
   color: var(--ink-soft);
+}
+
+.slot__watch {
+  color: var(--violet);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.slot__watch:hover {
+  color: var(--fluoro);
 }
 
 .state {
