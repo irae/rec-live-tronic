@@ -36,7 +36,7 @@ RestrictNamespaces=yes
 RestrictRealtime=yes
 SystemCallArchitectures=native
 LockPersonality=yes
-ReadWritePaths=/var/lib/rec-live-tronic /run/rec-live-tronic
+ReadWritePaths=/var/lib/rec-live-tronic /run/rec-live-tronic /srv/rec-live-tronic/recordings
 
 [Install]
 WantedBy=multi-user.target
