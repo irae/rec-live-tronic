@@ -132,13 +132,35 @@ function goBack(): void {
   emit("back");
 }
 
+function legacyCopy(text: string): boolean {
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.style.position = "fixed";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+  const copied = document.execCommand("copy");
+  document.body.removeChild(textarea);
+  return copied;
+}
+
+function showCopied(): void {
+  copyDone.value = true;
+  setTimeout(() => {
+    copyDone.value = false;
+  }, 1600);
+}
+
 function copyUrl(): void {
-  navigator.clipboard.writeText(streamUrl.value).then(() => {
-    copyDone.value = true;
-    setTimeout(() => {
-      copyDone.value = false;
-    }, 1600);
-  });
+  // navigator.clipboard requires a secure context (HTTPS/localhost); this app
+  // is served over plain HTTP on the LAN/Tailscale, so it's undefined there.
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(streamUrl.value).then(showCopied, () => {
+      if (legacyCopy(streamUrl.value)) showCopied();
+    });
+  } else if (legacyCopy(streamUrl.value)) {
+    showCopied();
+  }
 }
 
 function askDelete(): void {
