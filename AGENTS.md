@@ -6,6 +6,10 @@ This document covers how to set up and run the development environment locally. 
 
 - Never swallow a real error silently — `console.error` it server-side before returning a friendly/generic message to the client.
 - For player/UI bugs you can't verify statically: start `npm start` + `npm run dev:client` and ask the user to check it live in their browser — especially anything involving the `<video>` player.
+- Verify factual/external claims (browser support matrices, third-party library API behavior, etc.) against real, current sources before writing them into committed docs — recalled/trained knowledge on things like this can be confidently wrong.
+- When something fails with no obvious cause, trace the real root cause by reading actual source/config (application code, systemd unit files, library source) before guessing or asking for logs that may not even be accessible.
+- Don't remove a feature/link just because it doesn't work out of the box for the current tester — confirm with the owner first; they may complete missing setup themselves rather than want it gone.
+- Keep architecture/spec docs to current decided state only — historical rationale (what changed, when, why) belongs in git commit history, not living spec docs.
 
 ## Prerequisites
 
@@ -82,7 +86,7 @@ Full API reference and response shapes are documented in `README.md` under "Phas
 
 Two distinct log sources exist on the deployed host, with different access:
 
-- **Per-recording streamlink capture logs — viewable, no root needed.** `<recordingsDir>/<id>.log` (e.g. `/srv/rec-live-tronic/recordings/<id>.log`) holds the recorder subprocess's `stderr`, appended directly to a file next to the `.ts` (commit `1385458`, "stderr to shared log"). This directory is `rec-media`-group readable/writable, so `irae` (a `rec-media` member) can read these directly over SSH — no `su`/`sudo` needed. Also fetchable via `GET /recordings/:id/log`.
+- **Per-recording streamlink capture logs — viewable, no root needed.** `<recordingsDir>/<id>.log` (e.g. `/srv/rec-live-tronic/recordings/<id>.log`) holds the recorder subprocess's `stderr`, appended directly to a file next to the `.ts` (commit `1385458`, "stderr to shared log"). This directory is `rec-media`-group readable/writable, so `irae` (a `rec-media` member) can read these directly over SSH — no `su`/`sudo` needed. Note: `GET /recordings/:id/log` (an HTTP route to fetch this) is not implemented — reading it currently requires direct filesystem/SSH access, not curl.
 - **API/reconciler service's own `stdout`/`stderr` — NOT viewable by `irae` as deployed.** Neither systemd unit (`rec-live-tronic-api.service`, `rec-live-tronic-reconciler.service`) overrides `StandardOutput`/`StandardError`, so both default to the systemd journal only — not a file under the `rec-media`-readable tree. Reading them requires either `adm`/`systemd-journal` group membership (`irae` doesn't have this by default — verified directly: `journalctl -u rec-live-tronic-api.service` as `irae` returns `-- No entries --` with an explicit "users in groups adm, systemd-journal can see all messages" notice) or root (`sudo journalctl -u <unit>`). This matters for any application-level `console.error`/`console.log` in `src/` — e.g. `RecorderService.deleteRecording`'s unlink-failure logging — none of that reaches an `irae`-readable file as currently configured.
 
 If future debugging needs the API/reconciler's own logs readable without root, the fix is adding `irae` to `adm` or `systemd-journal` on the host (`usermod -aG systemd-journal irae`, requires root), or adding an explicit `StandardOutput=append:...`/`StandardError=append:...` to those units pointing at a `rec-media`-readable path (mirroring the streamlink pattern above) — neither has been done as of this writing.
