@@ -185,3 +185,107 @@ t.test("returns 409 for a recording that is still scheduled", async (t) => {
   const body = await fileResponse.json() as { error: { code: string } };
   t.equal(body.error.code, "STATUS_CONFLICT");
 });
+
+t.test("deletes a finished recording's file and row on explicit request", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=delete-test-1",
+      title: "delete test 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  const testContent = "test video content for delete";
+  const filePath = join(root, "recordings", `${id}.ts`);
+  await writeFile(filePath, testContent);
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  const deleteResponse = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  t.equal(deleteResponse.status, 204);
+  const getAfterDelete = await fetch(`${base}/recordings/${id}`);
+  t.equal(getAfterDelete.status, 404);
+});
+
+t.test("rejects deleting a recording that is not finished", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=delete-test-2",
+      title: "delete test 2",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string } };
+  const id = createdBody.recording.id;
+  const deleteResponse = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  t.equal(deleteResponse.status, 409);
+  const deleteBody = await deleteResponse.json() as { error: { code: string } };
+  t.equal(deleteBody.error.code, "STATUS_CONFLICT");
+  const getAfterDelete = await fetch(`${base}/recordings/${id}`);
+  t.equal(getAfterDelete.status, 200);
+});
+
+t.test("leaves no dangling row and no orphaned file after a delete", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=delete-test-3",
+      title: "delete test 3",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  const filePath = join(root, "recordings", `${id}.ts`);
+  await writeFile(filePath, "test content");
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  const deleteResponse = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  t.equal(deleteResponse.status, 204);
+  const getAfterDelete = await fetch(`${base}/recordings/${id}`);
+  t.equal(getAfterDelete.status, 404);
+  const { existsSync } = await import("node:fs");
+  t.equal(existsSync(filePath), false);
+});

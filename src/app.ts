@@ -109,6 +109,9 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService): void 
       });
     } catch (error) { next(error); }
   });
+  app.delete("/recordings/:id/file", async (request, response, next) => {
+    try { await recorder.deleteRecording(request.params.id); response.status(204).end(); } catch (error) { next(error); }
+  });
 
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024, files: 1 } });
   app.post("/cookies", upload.single("file"), async (request, response, next) => {

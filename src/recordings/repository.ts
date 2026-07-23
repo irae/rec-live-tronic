@@ -263,6 +263,14 @@ export class RecordingRepository {
     return this.list({ status: "cancelled" });
   }
 
+  delete(id: string): void {
+    this.database.transaction(() => {
+      const existing = this.getById(id);
+      if (existing === undefined) throw new Error(`Recording ${id} not found`);
+      this.database.prepare("DELETE FROM recordings WHERE id = ?").run(id);
+    })();
+  }
+
   private listByWindow(status: RecordingStatus, now: UtcInstant, predicate: string): Recording[] {
     const value = timestamp(now, "now");
     const parameterCount = (predicate.match(/\?/g) ?? []).length;

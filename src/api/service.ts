@@ -193,6 +193,22 @@ export class RecorderService {
     if (basename(cookie.path) === id && cookie.path === join(this.config.cookiesDir, id)) await unlink(cookie.path).catch(() => undefined);
   }
 
+  async deleteRecording(id: string): Promise<void> {
+    const recording = this.recordings.getById(id);
+    if (!recording) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    if (recording.status !== "recorded") throw new AppError("STATUS_CONFLICT", 409, "Only finished recordings can be deleted");
+    try {
+      await unlink(recording.tsPath);
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+        // File already missing, continue to delete row
+      } else {
+        throw new AppError("FILE_DELETE_ERROR", 500, "Failed to delete recording file");
+      }
+    }
+    this.recordings.delete(id);
+  }
+
   transition(input: { id: string; expected_status: unknown; expected_version: unknown; status: unknown; last_started_boot_id?: unknown; last_started_stop_at?: unknown }): ReturnType<typeof mapRecording> {
     if (!Number.isSafeInteger(input.expected_version) || (input.expected_version as number) < 0) throw new AppError("VALIDATION_ERROR", 400, "expected_version is invalid");
     const lastStartedBootId = input.last_started_boot_id === undefined ? undefined : text(input.last_started_boot_id, "last_started_boot_id", 200);
