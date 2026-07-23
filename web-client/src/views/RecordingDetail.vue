@@ -10,7 +10,13 @@
             <span>{{ extractFestival(recording.title) ? extractFestival(recording.title) : recording.stage || "Stage" }}</span>
             <span class="rec"><span class="blip"></span>archived</span>
           </div>
-          <video :src="streamUrl" controls class="video-player"></video>
+          <video
+            v-if="useMpegts"
+            ref="videoEl"
+            controls
+            class="video-player"
+          ></video>
+          <video v-else :src="streamUrl" controls class="video-player"></video>
         </div>
         <div v-else class="player player--placeholder">
           <div class="frame">
@@ -67,8 +73,9 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed } from "vue";
+import { ref, watch, computed, onUnmounted, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
+import mpegts from "mpegts.js";
 import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 
@@ -105,6 +112,39 @@ const streamUrl = computed(() => {
   return `${window.location.origin}/recordings/${recordingId.value}/file`;
 });
 
+// mpegts.js's own supportability check (MSE availability etc). Falls back to
+// the plain <video :src> behavior when unsupported, rather than a broken player.
+const useMpegts = mpegts.isSupported();
+const videoEl = ref<HTMLVideoElement | null>(null);
+let player: ReturnType<typeof mpegts.createPlayer> | null = null;
+
+function destroyPlayer(): void {
+  if (!player) return;
+  try {
+    player.pause();
+    player.unload();
+    player.detachMediaElement();
+    player.destroy();
+  } catch (error) {
+    console.error("Failed to tear down mpegts.js player:", error);
+  }
+  player = null;
+}
+
+function setupPlayer(): void {
+  destroyPlayer();
+  if (!useMpegts || !videoEl.value || !streamUrl.value) return;
+  player = mpegts.createPlayer(
+    { type: "mpegts", url: streamUrl.value, isLive: false },
+    {},
+  );
+  player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
+    console.error("mpegts.js playback error:", type, detail);
+  });
+  player.attachMediaElement(videoEl.value);
+  player.load();
+}
+
 const isIos = computed(() => {
   return /iPad|iPhone|iPod/.test(navigator.userAgent);
 });
@@ -124,17 +164,26 @@ const vlcUrl = computed(() => {
 watch(
   () => route.params.id,
   async (id) => {
+    destroyPlayer();
     recording.value = null;
     if (typeof id !== "string") return;
     try {
       recording.value = await api.getRecording(id);
       document.title = `Tronic · ${recording.value.title}`;
+      if (recording.value.status === "recorded") {
+        await nextTick();
+        setupPlayer();
+      }
     } catch (error) {
       console.error("Failed to load recording:", error);
     }
   },
   { immediate: true },
 );
+
+onUnmounted(() => {
+  destroyPlayer();
+});
 
 function goBack(): void {
   router.push({ name: "archive" });

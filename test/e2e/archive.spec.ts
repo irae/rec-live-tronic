@@ -18,6 +18,16 @@ test("archive: click recording link opens detail with player", async ({
   page,
 }) => {
   const { id } = await seedRecordedRecording("Test Video Player");
+
+  // mpegts.js drives playback by attaching a MediaSource to the <video>
+  // element and range-fetching the real file endpoint through it, rather
+  // than handing the browser the raw .ts URL directly (which no current
+  // browser plays natively). Watch for that real request so the test can't
+  // pass on a player that merely renders without ever fetching real data.
+  const fileRequestPromise = page.waitForRequest((request) =>
+    request.url().includes(`/recordings/${id}/file`)
+  );
+
   await page.goto(`${BASE_URL}/`);
 
   // Click on the recording row
@@ -27,11 +37,20 @@ test("archive: click recording link opens detail with player", async ({
     .first();
   await recordingStub.click();
 
-  // Assert the video element is visible and has the correct src
+  // Assert the video element is visible and mpegts.js actually attached a
+  // MediaSource to it: the src is a blob: object URL, never the raw file
+  // URL a plain <video src> would have used (and which no major browser
+  // plays back natively for a standalone .ts file).
   const video = page.locator("video").first();
   await expect(video).toBeVisible({ timeout: 10000 });
   const src = await video.getAttribute("src");
-  expect(src).toContain(`/recordings/${id}/file`);
+  expect(src).toMatch(/^blob:/);
+
+  // Assert mpegts.js actually issued a real request against the recording's
+  // file endpoint (i.e. this is a live, working player, not just a decorative
+  // <video> element with no data source).
+  const fileRequest = await fileRequestPromise;
+  expect(fileRequest.url()).toContain(`/recordings/${id}/file`);
 });
 
 test("archive: copy-url works", async ({ page, context, browserName }) => {
