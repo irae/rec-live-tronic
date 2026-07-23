@@ -133,7 +133,7 @@
               <div class="slot__meta mono">{{ formatTimeInfo(rec) }}</div>
               <div class="actions">
                 <button v-if="rec.status === 'recording' && !stoppingIds.has(rec.id)" class="tbtn tbtn--stop" @click.prevent="handleStopEarly(rec.id)">■ Stop early</button>
-                <button v-else class="tbtn tbtn--go" @click.prevent="handleStartNow(rec.id)">▶ Start now</button>
+                <button v-else-if="rec.status === 'scheduled' && !hasStartPassed(rec)" class="tbtn tbtn--go" @click.prevent="handleStartNow(rec.id)">▶ Start now</button>
                 <button v-if="rec.status === 'scheduled'" class="tbtn" @click.prevent="startEdit(rec)">Edit</button>
                 <button v-if="rec.status === 'scheduled'" class="tbtn" @click.prevent="handleCancel(rec.id)">Cancel</button>
               </div>
@@ -400,6 +400,10 @@ async function saveEdit(id: string): Promise<void> {
 
 function cancelEdit(): void {
   editingId.value = null;
+}
+
+function hasStartPassed(rec: Recording): boolean {
+  return new Date(rec.startAt).getTime() <= Date.now();
 }
 
 function recordingProgressPercent(rec: Recording): number {
