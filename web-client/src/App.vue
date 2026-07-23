@@ -14,7 +14,7 @@
     <main class="wrap">
       <ArchiveView :key="refreshKey" v-show="view === 'archive'" @select-recording="selectRecording" :selected-id="selectedId" />
       <ScheduleView v-show="view === 'schedule'" @select-recording="selectRecording" :selected-id="selectedId" />
-      <RecordingDetail v-show="view === 'detail'" :recording-id="selectedId" @back="view = 'archive'" @deleted="refreshKey++" />
+      <RecordingDetail v-show="view === 'detail'" :recording-id="selectedId" @back="goBackToArchive" @deleted="refreshKey++" />
     </main>
 
     <footer class="foot">
@@ -37,6 +37,11 @@ const refreshKey = ref(0);
 function selectRecording(id: string): void {
   selectedId.value = id;
   view.value = "detail";
+}
+
+function goBackToArchive(): void {
+  selectedId.value = null;
+  view.value = "archive";
 }
 </script>
 

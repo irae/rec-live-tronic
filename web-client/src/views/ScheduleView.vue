@@ -30,7 +30,7 @@
                 id="title"
                 type="text"
                 v-model="form.title"
-                placeholder="Act — Stage — Festival"
+                placeholder="Act - Stage - Festival"
               />
             </div>
 
@@ -43,8 +43,6 @@
                 <label for="q2">720p</label>
                 <input type="radio" name="q" id="q3" value="480p" v-model="form.quality" />
                 <label for="q3">480p</label>
-                <input type="radio" name="q" id="q4" value="audio" v-model="form.quality" />
-                <label for="q4">Audio only</label>
               </div>
             </div>
 
@@ -122,7 +120,7 @@
               <div class="actions">
                 <button v-if="rec.status === 'recording'" class="tbtn tbtn--stop" @click.prevent="handleStopEarly(rec.id)">■ Stop early</button>
                 <button v-else class="tbtn tbtn--go" @click.prevent="handleStartNow(rec.id)">▶ Start now</button>
-                <button class="tbtn" @click.prevent="startEdit(rec)">Edit</button>
+                <button v-if="rec.status === 'scheduled'" class="tbtn" @click.prevent="startEdit(rec)">Edit</button>
                 <button v-if="rec.status === 'scheduled'" class="tbtn" @click.prevent="handleCancel(rec.id)">Cancel</button>
               </div>
             </template>
@@ -244,12 +242,12 @@ async function handleCancel(id: string): Promise<void> {
 async function handleStartNow(id: string): Promise<void> {
   try {
     error.value = null;
-    await api.patchRecording(id, {
+    const result = await api.patchRecording(id, {
       start_at: new Date().toISOString(),
     });
     const idx = recordings.value.findIndex((rec) => rec.id === id);
     if (idx >= 0) {
-      recordings.value[idx].status = "recording";
+      recordings.value[idx] = result.recording as unknown as Recording;
     }
   } catch (err) {
     console.error("Failed to start recording:", err);
@@ -261,12 +259,12 @@ async function handleStartNow(id: string): Promise<void> {
 async function handleStopEarly(id: string): Promise<void> {
   try {
     error.value = null;
-    await api.patchRecording(id, {
+    const result = await api.patchRecording(id, {
       stop_at: new Date().toISOString(),
     });
     const idx = recordings.value.findIndex((rec) => rec.id === id);
     if (idx >= 0) {
-      recordings.value[idx].status = "recorded";
+      recordings.value[idx] = result.recording as unknown as Recording;
     }
   } catch (err) {
     console.error("Failed to stop recording:", err);

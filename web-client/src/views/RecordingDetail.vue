@@ -47,6 +47,7 @@
         <div class="danger">
           <h3>◆ Danger zone</h3>
           <p>Deleting removes the recorded file from disk for good. There is no undo and no copy kept anywhere else.</p>
+          <p v-if="deleteError" class="danger-error">{{ deleteError }}</p>
           <button class="btn btn--danger" @click="askDelete">🗑 Delete recording — permanent</button>
         </div>
       </div>
@@ -98,6 +99,7 @@ const emit = defineEmits<{
 const recording = ref<Recording | null>(null);
 const copyDone = ref(false);
 const showDeleteConfirm = ref(false);
+const deleteError = ref<string | null>(null);
 
 const streamUrl = computed(() => {
   if (!props.recordingId) return "";
@@ -140,6 +142,7 @@ function copyUrl(): void {
 }
 
 function askDelete(): void {
+  deleteError.value = null;
   showDeleteConfirm.value = true;
 }
 
@@ -153,6 +156,7 @@ async function confirmDelete(): Promise<void> {
   } catch (error) {
     console.error("Failed to delete recording:", error);
     showDeleteConfirm.value = false;
+    deleteError.value = error instanceof Error ? error.message : "Failed to delete recording";
   }
 }
 
@@ -517,6 +521,17 @@ function formatStatus(status: string): string {
   font-size: 13px;
   color: var(--ink-soft);
   max-width: 46ch;
+}
+
+.danger-error {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--fluoro);
+  border: 2px solid var(--fluoro);
+  background: var(--paper);
+  padding: 8px 10px;
+  max-width: none;
 }
 
 .btn {
