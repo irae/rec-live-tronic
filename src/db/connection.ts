@@ -52,6 +52,7 @@ export function openDatabase(databasePath: string, options: DatabaseConnectionOp
     if (!readonly) enforceDatabaseFileModes(databasePath);
     return database;
   } catch (error) {
+    console.error(`Failed to initialize database at ${databasePath}:`, error);
     database.close();
     throw error;
   }

@@ -173,9 +173,11 @@ export class RecorderService {
     try {
       return this.cookies.createMetadata({ id, name, path });
     } catch (error) {
+      console.error(`Failed to create cookie metadata for ${id} (${path}):`, error);
       try {
         await unlink(path);
       } catch (cleanupError) {
+        console.error(`Failed to clean up cookie file for ${id} (${path}):`, cleanupError);
         throw new AppError("COOKIE_STORAGE_ROLLBACK_FAILED", 500, "Cookie storage cleanup failed; operator action is required");
       }
       throw error;
@@ -218,6 +220,6 @@ export class RecorderService {
       const result = this.recordings.compareAndSetStatus({ id: input.id, expectedStatus: requireStatus(input.expected_status), expectedVersion: input.expected_version as number, status: requireStatus(input.status), ...(lastStartedBootId === undefined ? {} : { lastStartedBootId }), ...(lastStartedStopAt === undefined ? {} : { lastStartedStopAt }) });
       if (result.outcome !== "updated") throw new AppError(result.outcome === "not_found" ? "NOT_FOUND" : "CONFLICT", result.outcome === "not_found" ? 404 : 409, "Recording transition did not apply");
       return mapRecording(result.value);
-    } catch (error) { if (error instanceof AppError) throw error; throw new AppError("VALIDATION_ERROR", 400, error instanceof Error ? error.message : "Invalid transition"); }
+    } catch (error) { if (error instanceof AppError) throw error; console.error(`Failed to transition recording ${input.id}:`, error); throw new AppError("VALIDATION_ERROR", 400, error instanceof Error ? error.message : "Invalid transition"); }
   }
 }

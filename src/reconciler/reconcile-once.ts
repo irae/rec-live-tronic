@@ -36,7 +36,18 @@ export async function createPrivateTransitionClient(socketPath: string): Promise
 }
 
 async function hasOutput(recording: Recording): Promise<boolean> {
-  try { const result = await stat(recording.tsPath); return result.isFile() && result.size > 0; } catch { return false; }
+  try {
+    const result = await stat(recording.tsPath);
+    return result.isFile() && result.size > 0;
+  } catch (error) {
+    // ENOENT is the routine, expected signal that no output was ever produced
+    // (e.g. the stream never started) -- this decides failed/missed, it's not
+    // an operational error worth logging. Anything else (permissions, I/O) is.
+    if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+      console.error(`Failed to stat recording file ${recording.tsPath}:`, error);
+    }
+    return false;
+  }
 }
 
 async function complete(recording: Recording, deps: ReconcileDependencies, summary: ReconcileSummary): Promise<void> {
