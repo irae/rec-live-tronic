@@ -124,7 +124,7 @@ The operator installs these before running the repository's installer:
   the human-owned installation under `/home/irae/.local`.
 - SQLite CLI for diagnosis and backup checks. `better-sqlite3` supplies the
   application's SQLite binding.
-- `ffmpeg` is not needed until Phase 3 and is already present.
+- `ffmpeg` is not needed until Phase 5 (trim/split editing) and is already present.
 
 The root installer verifies versions and capabilities; it does not silently
 install OS packages or alter the existing human-owned streamlink installation.
@@ -146,9 +146,8 @@ The repository currently contains no application scaffold. Phase 0 creates:
   `REC_LIVE_HOST=0.0.0.0` and `REC_LIVE_PORT`, plus safe local defaults.
 - `src/config.ts`: loads and validates the listen host/port, paths, streamlink
   executable, timer/runtime limits, and the private socket path.
-- `src/app.ts`: exports `createApp(deps)`, including the future authentication
-  middleware seam, public Phase 0 routes, consistent errors, and request
-  validation.
+- `src/app.ts`: exports `createApp(deps)`, public Phase 0 routes, consistent
+  errors, and request validation.
 - `src/server.ts`: opens the database, creates services, and starts the public
   configured TCP listener plus the private Unix-socket listener.
 - `src/db/connection.ts`: opens SQLite, enables WAL, foreign keys, busy timeout,
@@ -311,7 +310,7 @@ Built:
   so seeking works with no hand-rolled range logic. `404` when the recording
   does not exist, `409` while `scheduled` or `recording` (serving a growing
   in-progress file stays a non-goal). Same public `0.0.0.0` listener and
-  no-auth perimeter posture as every other route; the stable per-file URL is
+  open-access posture as every other route; the stable per-file URL is
   `http://<host>:<port>/recordings/<id>/file`.
 - **Split release into `web`, `reconciler`, and `deps` packages.** Three plain
   `.tar.gz` artifacts (no checksums, no manifests) from the single container
@@ -332,11 +331,6 @@ Verified live on `irae-sheeta`:
 
 These are separate larger blocks. Resolve each listed open decision immediately
 before its phase and commit completed blocks, not their sub-steps.
-
-**Standing note — authentication is out of scope** until the owner explicitly
-requests it, consistent with `spec.md`'s non-goals. The `createApp` middleware
-seam stays in place so it can be added later, but no phase below builds it and
-no perimeter posture depends on it.
 
 **Removed — HTTP log tailing.** The former `GET /recordings/:id/log` route is
 dropped entirely: §0.7's shared `rec-media` group already gives direct
@@ -479,7 +473,7 @@ and keeping the row after the file is gone would strand a dangling reference.
    file may still exist.
 2. Point the existing `DELETE /recordings/:id/file` handler in `src/app.ts` at
    `deleteRecording` and respond `204 No Content` on success (matching the
-   `DELETE /cookies/:id` shape). Derived trim/split recordings (Phase 3) are
+   `DELETE /cookies/:id` shape). Derived trim/split recordings (Phase 5) are
    independent rows with their own files and are deleted the same way, each on
    its own.
 3. Extend the functional server suite (test names only):
@@ -553,13 +547,242 @@ t.test("leaves no dangling row and no orphaned file after a delete");
       existing `web` service with no change to the release package boundaries.
 - [ ] No operation requires a browser-only path — curl parity holds.
 
-### Phase 3 — file operations
+### Phase 3 — trash / retention
+
+**Complexity: Medium.** Turns today's single destructive delete into a
+reversible soft-delete with a dedicated trash view, restore, permanent delete, a
+global disk-space readout, and a deliberately simple 30-day auto-purge. The Phase
+0 invariants are untouched: the API stays the sole SQLite writer, the reconciler
+is not involved, and the only new on-disk effect is a row update (no new
+`ReadWritePaths=` directory, so no `ProtectSystem=strict` change — confirm
+against `systemd/rec-live-tronic-api.service` regardless before shipping).
+
+**First step is a design-and-pause gate** (same shape as Phase 2's
+design-prototype gate — a real stop-and-ask point, not just a bullet). A separate
+MEDIUM-tier frontend-design agent is, in parallel with this plan, building
+**only** the trash view's static UI shell with stub/mock data — no backend
+wiring. That shell is **gated: the owner reviews and approves it before any
+backend wiring proceeds.** Everything below (the `trashed_at` field, endpoints,
+restore/permanent-delete actions, disk-space readout, auto-purge) is built only
+after that approval lands. Do not begin backend work until the owner signs off on
+the shell.
+
+**Data model change (decision).** Deletion becomes reversible. Add a durable
+**nullable `trashed_at`** timestamp column to `recordings` via
+`migrations/004-recording-trash.sql` (the next sequential migration after
+`003-recording-stage.sql`), null for every existing row. A non-null `trashed_at`
+means "in trash": the row stays in SQLite and its file(s) stay on disk, but it is
+excluded from the normal Archive/Schedule listings. This replaces the Phase 2
+behaviour where `DELETE /recordings/:id/file` unlinked the file and deleted the
+row in one irreversible step. `trashed_at` round-trips through the existing
+`GET /recordings` / `GET /recordings/:id` responses — add it to `selectColumns`,
+the `RecordingRow` mapping, and the `Recording` shape in
+`src/recordings/repository.ts`, exactly as `stage` was. Trash is **orthogonal to
+status**: a trashed row keeps its terminal `recorded`/`muxed` status and merely
+gains a `trashed_at`, rather than introducing a new `trashed` status value.
+
+**API surface (curl-first)** — matches spec.md's "API surface (curl-first)"
+conventions.
+
+- `DELETE /recordings/:id/file` **now means "move to trash", not purge.** It sets
+  `trashed_at = now` on a finished (`recorded`/`muxed`) row and returns `204`;
+  file and row both survive. Same gate as the Phase 2 purge: `404` if absent,
+  `409` if not finished (a `scheduled`/`recording` row still cancels through
+  `DELETE /recordings/:id`). Trashing an already-trashed row is a no-op `204`.
+- `POST /recordings/:id/restore` (new) — clears `trashed_at` back to null and
+  returns the restored row (`200`); `404` if absent, `409` if the row is not
+  currently trashed. The row reappears in the normal Archive listing.
+- `DELETE /recordings/:id/trash` (new) — **permanent delete**, distinct from the
+  30-day sweep. Performs the old Phase 2 purge routine: unlink the file(s)
+  tolerating already-missing, then delete the SQLite row; `204` on success, `500`
+  on any unlink failure other than already-missing (row left intact, safely
+  retryable). Gated to **trashed rows only** (`409` if `trashed_at` is null — you
+  cannot permanently delete something not in trash), `404` if absent. This is the
+  *same* purge routine the 30-day sweep calls — factor it into one function so
+  both call sites share it.
+- `GET /recordings` gains a `trashed` filter for the trash view. Today
+  `?status=<one>` filters by a single status; trash cuts across status, so add a
+  separate boolean param: `GET /recordings?trashed=true` returns only trashed
+  rows (newest-trashed first). The default `GET /recordings` **and every
+  `?status=` filter now exclude trashed rows**, so Archive and Schedule never
+  surface trashed items without opting in. The trash view issues its own
+  `GET /recordings?trashed=true` fetch (a disjoint set from the archive, so it
+  does not fold into the client's existing fetch-once-and-partition pattern).
+
+**Disk-space readout (global header — corrects the earlier trash-view-only
+framing).** Disk space is shown in a **global header view present across the
+whole app**, not inside the trash view. It is fed by the **existing client
+polling loop** (`ScheduleView.vue` already polls every 60s — the header reads the
+same periodic refresh) so it "always" shows current free space. Two figures:
+
+- **Actual free space** on the recordings filesystem — server-side `fs.statfs`
+  (Node) of the recordings directory.
+- **Projected free space** — actual free space adjusted for the bytes still being
+  consumed by in-progress captures: only rows currently `recording` (whose `.ts`
+  is open and growing) count toward the projection. **`scheduled`-but-not-started
+  rows are explicitly excluded** ("based on partial files, **not** scheduled")
+  because their eventual size is unknown, so they are never projected.
+
+Disk space piggybacks on the existing client polling — the server computes the
+two figures and returns them alongside whatever the client already polls (exact
+endpoint carrying them is a small implementation choice; see the note at the end
+of this phase).
+
+**UI.**
+
+- **Trash view** — a new SPA screen/route (e.g. `/trash`, alongside `/`,
+  `/schedule`, `/watch/:id`); its static shell is the gated first step above.
+  Lists trashed rows from `GET /recordings?trashed=true`, each with a **Restore**
+  action (`POST /recordings/:id/restore`) and a **Permanent delete** action
+  (`DELETE /recordings/:id/trash`). Disk space is **not** shown here — it lives in
+  the global header now.
+- **Global header disk-space readout** — the actual/projected figures above, on
+  the app header across all views.
+- **Soft-delete confirmation flow.** The Archive/detail "remove" control now
+  trashes instead of purging. Because trashing is reversible, its previous
+  hard-warning confirmation dialog is **removed/simplified** — the current
+  `RecordingDetail.vue` copy ("Deleting removes the recorded file from disk for
+  good. There is no undo and no copy kept anywhere else.") no longer applies and
+  must change, since delete is now undoable from trash. (Owner's "implemented on
+  UI, remove dialog" = remove the *confirmation dialog* on the now-reversible
+  delete, **not** remove the delete control itself.) Permanent delete in the trash
+  view keeps a confirmation — that action is irreversible.
+
+**30-day auto-purge (deliberately simple — owner-specified, do not
+over-engineer).** The owner explicitly rejected a reconciler-, cron-, or
+systemd-timer-driven design here and accepts the pitfalls. Implement exactly as
+specified: on **app start**, run one purge pass that calls the shared
+permanent-delete routine on every row whose `trashed_at` is older than 30 days;
+then a plain `setInterval` re-checks **once per day** for the process lifetime.
+No reconciler involvement, no systemd timer, no downtime catch-up beyond "it runs
+again on next start". Accepted pitfalls, called out as OK: if the process is down
+when a row crosses 30 days, it is simply purged on the next start or the next
+daily tick — nothing tracks missed windows. It lives in the `web` service start
+path (`src/server.ts`). Per the owner's backlog this auto-purge is slotted to
+*land* in **Phase 8** (see Phase 8); the full mechanism is specified here because
+it shares Phase 3's permanent-delete routine, and manual permanent-delete covers
+retention until then.
+
+**Functional tests** (server suite, test names only):
+
+```ts
+// test/functional/server.test.ts (additional blocks)
+t.test("moves a finished recording to trash instead of purging it");
+t.test("excludes trashed recordings from the default and status-filtered listings");
+t.test("lists only trashed recordings via ?trashed=true");
+t.test("restores a trashed recording back into the archive listing");
+t.test("rejects restoring a recording that is not in trash");
+t.test("permanently deletes a trashed recording's file and row");
+t.test("rejects permanent delete of a recording that is not in trash");
+t.test("rejects trashing a recording that is not finished");
+t.test("purges only trash older than thirty days on the startup sweep");
+```
+
+**Implementation sequence.** (The design-and-pause gate at step 1 is an
+owner-review checkpoint *within* the phase, not the finish line.)
+
+1. **Trash-view design-and-pause gate** — the parallel MEDIUM frontend-design
+   agent's static shell with stub data. Pause for owner approval before any
+   backend wiring.
+2. Add `migrations/004-recording-trash.sql` (nullable `trashed_at`); extend
+   `selectColumns`, the `RecordingRow` mapping, and the `Recording` type in
+   `src/recordings/repository.ts` to carry it; existing rows default to null.
+3. Repository methods (API stays the sole writer): `trash(id)` (set
+   `trashed_at`), `restore(id)` (clear it), and a shared `purge(id)` (unlink
+   file(s) + `DELETE FROM recordings`); extend `list()` so the default and
+   `status` queries exclude `trashed_at IS NOT NULL`, and add a `trashed`-only
+   query path.
+4. `RecorderService` methods in `src/api/service.ts` for trash / restore /
+   permanent-delete with the status-and-trash gates and `404`/`409`/`500`
+   outcomes above; the auto-purge sweep calls `purge` for rows older than 30
+   days.
+5. Re-point `DELETE /recordings/:id/file` at the trash action; add
+   `POST /recordings/:id/restore`, `DELETE /recordings/:id/trash`, and the
+   `?trashed=true` filter in `src/app.ts`; add the disk-space figures to the
+   polled response.
+6. Web client: the trash view (restore / permanent-delete), the global-header
+   disk-space readout, and the simplified soft-delete confirmation copy.
+7. Wire the app-start + daily-`setInterval` 30-day sweep in `src/server.ts`.
+8. Functional tests above; verify on `irae-sheeta` (trash a real recording,
+   restore it, permanently delete it, confirm the archive excludes trashed rows
+   and the disk figures read correctly).
+
+**Acceptance criteria — what "Phase 3 done" looks like.**
+- [ ] The owner approved the static trash-view shell before backend wiring began.
+- [ ] Deleting a finished recording from the UI moves it to trash (file + row
+      survive), not a hard purge.
+- [ ] The archive and schedule listings exclude trashed rows; the trash view
+      lists exactly the trashed rows.
+- [ ] Restore returns a trashed recording to the archive; permanent delete
+      removes its file and row and is gated to trashed rows only.
+- [ ] The global header shows actual and projected free space, the projection
+      counting in-progress captures but never scheduled rows, refreshed by the
+      existing poll.
+- [ ] The reversible delete no longer shows the old irreversible-warning dialog;
+      permanent delete still confirms.
+- [ ] The 30-day sweep runs on app start and once daily, purging only trash older
+      than 30 days.
+- [ ] curl parity holds for trash / restore / permanent-delete — no browser-only
+      path.
+
+**Open decision (small).** Which polled response carries the two disk-space
+figures — extend the existing `GET /health`, or attach them to the periodic
+`GET /recordings` the client already fetches. Resolve when wiring step 5; either
+keeps the "fed by existing polling" property.
+
+### Phase 4 — misc actions
+
+**Complexity: Medium.** Scheduling and quality-picker quality-of-life plus a
+raw-download affordance. Restates the owner's backlog; each item is small on its
+own. Written at later-phase summary depth — the specific requirements below are
+verbatim intent, resolve their fine details immediately before building.
+
+- **Duration field pre-filled with `1:10` always.** The schedule form's duration
+  input defaults to `1:10` on every new schedule (a fixed default, not a
+  remembered last value).
+- **"Now" tab on the schedule form.** A tab that **suppresses the date fields**
+  and keeps only the duration; **only the YouTube URL is mandatory** to start
+  recording immediately. (Distinct from Phase 2's `PATCH start_at = now`
+  "start now" on an already-scheduled row — this creates-and-starts in one step
+  from the form.)
+- **Lower the reconciler tick to 10 seconds.** Specifically because "start now"
+  currently misses too much when trying to start fast — the 30-second tick is too
+  coarse for immediate starts. Drop the reconciler timer to a 10-second interval
+  (`systemd/rec-live-tronic-reconciler.timer`).
+- **Fetch YouTube metadata to pre-fill the title.** Pre-fill the schedule title
+  from the channel name and the stream's own title. **Reuse the existing oEmbed
+  lookup** already wired for the `stage` field (Phase 2 —
+  `REC_LIVE_OEMBED_ENDPOINT`, reads `author_name`); do not reinvent a metadata
+  system — extend that same call to also surface the stream title for the title
+  prefill.
+- **Quality picker driven by YouTube metadata.** The available-formats list comes
+  from the stream's metadata. **`best` is always kept, shown with parens of what
+  it resolved to** (e.g. `best (1080p60)`), followed by **2 extra pills ordered
+  by quality**, and a **dropdown with all formats**. **Video-only until the
+  audio-only phase exists** (Phase 6) — no audio-only entries appear here yet.
+- **Download video as raw `.ts`, working even from trash.** A download affordance
+  for the raw `.ts` (the Phase 1 `GET /recordings/:id/file` route already serves
+  the bytes) that also works for a **trashed** recording, since its file is still
+  on disk until permanently deleted.
+
+### Phase 5 — editing actions
 
 **Complexity: Medium.** Non-destructive derived-recording operations over
-already-finished files. None of this touches the recorder core. (Deleting a
-finished recording — file plus its SQLite row — moved to Phase 2 alongside the
-other CRUD; derived recordings created here are independent rows deleted the same
-way.)
+already-finished files, plus client-captured thumbnails. None of this touches the
+recorder core. (Deleting/trashing a finished recording moved to Phase 2 / Phase
+3; derived recordings created here are independent rows, trashed and deleted the
+same way as any other recording.)
+
+**First step is a research-and-review gate** (same shape as Phase 2's
+design-prototype gate — a real stop-and-ask point). **Research question,
+owner-reviewed before any building continues:** *can we show a preview of the
+trimmed/split video before the user clicks "confirm", or should we split first
+and make the result non-permanent so it can be undone until confirmed?*
+Investigate both directions (in-player client-side preview vs.
+produce-then-hold-uncommitted-until-confirmed) and **pause for the owner's
+decision** before implementing the trim/split confirm UX. The job mechanism and
+derived-row pattern below hold regardless of which preview model the owner picks;
+the gate decides the confirm/undo UX wrapped around them.
 
 Trim and split follow the **derived-recording-row** pattern: each produces one
 or more new recording rows with their own server-generated IDs whose output
@@ -575,10 +798,10 @@ type is unnecessary here — the owner's own framing when proposing trim was "ea
 with the web process, no need to touch the recorder core". A short-lived tracked
 job with simple durable state (the derived row lands `recorded` on atomic
 success, `failed` on error, preserving every file either way) is sufficient.
-Phase 4's remux inherits or extends this same mechanism (see Phase 4); it does
-not require the earlier phases to build a heavier machinery on its behalf.
-Offsets and cut points are validated numeric/`HH:MM:SS` values passed as argv,
-never shell fragments.
+Phase 8's remux inherits or extends this same mechanism (see Phase 8); this
+mechanism is introduced here, so there is no forward reference to unbuilt
+machinery. Offsets and cut points are validated numeric/`HH:MM:SS` values passed
+as argv, never shell fragments.
 
 1. **Trim** — `POST /recordings/:id/trim` (curl-first JSON: `{ "start": "14:36",
    "end"?: "1:23:45" }`, at least one of `start`/`end` required, ffmpeg-format
@@ -599,8 +822,24 @@ never shell fragments.
    and output path, so a long single capture becomes multiple derived
    recordings. All-or-nothing: publish the derived rows finished only when every
    segment cut succeeds; on any failure preserve every file and leave the failed
-   derived rows `failed`.
-3. Derived recordings are listed, served, and themselves re-trimmable/re-
+   derived rows `failed`. **⚠ Owner framing to reconcile:** the owner described
+   split as "record becomes two records, video splits keep one of the IDs and
+   recording gets split to new Id, end result is the same as if recorded
+   separately" — i.e. one result keeps the *original* ID and the source is
+   consumed, which diverges from the source-preserving all-new-derived-rows
+   decision above. Confirm with the owner which semantics win (keep-one-ID /
+   source-consumed vs. source-preserved / all-new-IDs) before building; the rest
+   of the mechanism is unaffected either way.
+3. **Client-captured thumbnails.** Possible but not yet verified end to end: the
+   owner pauses the `mpegts.js` player at a chosen frame and grabs it from the
+   `<video>` element via `<canvas>.drawImage()` + `toBlob()`/`toDataURL()` —
+   standard client-side frame capture that works on any rendered `<video>`
+   element regardless of how it is fed (MSE via `mpegts.js` is no different from a
+   plain file source here), and is not blocked by canvas tainting since the video
+   is same-origin. The client POSTs the captured image to a new endpoint to store
+   as the recording's thumbnail. Needs: the new upload endpoint / storage
+   location, and deciding whether/how a thumbnail surfaces in the Archive list.
+4. Derived recordings are listed, served, and themselves re-trimmable/re-
    splittable exactly like any other recording through the existing
    `GET /recordings/:id/file` route — no new serving path is introduced. Extend
    the functional server suite (test names only):
@@ -613,26 +852,67 @@ t.test("rejects a trim or split of a source that is not finished");
 t.test("leaves the source recording's row and file untouched after trim/split");
 ```
 
-### Phase 4 — conversion and download
+### Phase 6 — audio-only
+
+**Complexity: Medium.** Audio-only capture and playback, rolled out
+feature-by-feature behind a global toggle. Later-phase summary depth.
+
+- **Global video/audio toggle — build now as a real but inert control.** This is
+  designed and executed in this task, but **no-op until the following features
+  are implemented one by one**. All text/UI changes (labels, copy, the toggle
+  control itself, everywhere the app says "video") land on this task; the toggle
+  flips a global mode but each downstream behaviour is wired feature-by-feature in
+  the items below. Explicit staged rollout — build the visible toggle first,
+  functionally inert, then light up each capability in turn.
+- **VLC stream for audio-only.**
+- **Audio-only player.**
+- **Download audio only.**
+- **Schedule an audio-only recording** — from the quality/format dropdown built
+  in Phase 4 (video-only until this phase); audio-only entries become available
+  here.
+
+### Phase 7 — candidates (research)
+
+**Complexity: unknown — research first, plan after.** Bulk-import a broadcast
+schedule and promote entries to recordings. Framed by the owner as **open
+research questions, not a decided implementation** — do not invent the automation
+approach here.
+
+Open questions to research before any plan:
+
+- **How to automate schedule import**, with or without agents. Agents-with-API is
+  **a viable option** per the owner (there is no generic scraper); this is a
+  candidate approach to evaluate, not a decision.
+- **Research real schedule pages** such as `tomorrowland.com` — how their
+  schedules are structured and **how to present** an imported schedule in this
+  app.
+- **Import format** stays open (⚠ JSON array vs. CSV vs. ICS; JSON is the default
+  assumption) — resolve during the research, not now.
+
+Only **after** that research does this become a buildable plan (candidates
+migration, repository, bulk import/list/delete API, and an atomic
+promote-to-recording per the `candidates` data model already sketched in
+spec.md, with concurrent-promotion protection).
+
+### Phase 8 — conversion, demux, format
 
 **Complexity: Medium.** Deprioritised — the owner said they likely will not care
-about container conversion for a while, so this sits after Phase 3 and below the
-web client. It is here for completeness, not near-term work.
+about container conversion for a while, so this sits last. Here for completeness,
+not near-term work.
 
 **Job mechanism.** Remux reuses the **same lightweight one-shot tracked
-`ffmpeg -c copy` job** introduced for trim/split in Phase 3 — that mechanism is
-built first, in the earlier phase, so there is no forward reference to unbuilt
-machinery. A full container remux is the same shape of operation as a trim (a
-bounded `-c copy` pass over a finished file), so it needs nothing more robust
-than trim/split already established. If, when this phase is built, concurrent
-remuxes need capping or a longer job proves worth reconciling across reboot,
-extend that mechanism then; do not pre-build a heavier reconciled `mux-<id>`
-unit type on speculation.
+`ffmpeg -c copy` job** introduced for trim/split in **Phase 5** — built earlier,
+so there is no forward reference to unbuilt machinery. A full container remux is
+the same shape of operation as a trim (a bounded `-c copy` pass over a finished
+file), so it needs nothing more robust than trim/split already established. If,
+when this phase is built, concurrent remuxes need capping or a longer job proves
+worth reconciling across reboot, extend that mechanism then; do not pre-build a
+heavier reconciled `mux-<id>` unit type on speculation.
 
-1. **Remux/demux to a final container.** `ffmpeg -c copy` from the captured
-   `.ts` into the final `mp4`/`mkv` container, publishing `final_path` only on
-   atomic success and preserving the `.ts` on any failure. Two open decisions
-   carry over unchanged and are resolved immediately before this phase, not now:
+1. **Remux to a final container.** `ffmpeg -c copy` from the captured `.ts` into
+   the final `mp4`/`mkv` container, publishing `final_path` only on atomic
+   success and preserving the `.ts` on any failure. Two open decisions carry over
+   unchanged and are resolved immediately before this phase, not now:
    - ⚠ **`mkv` vs `mp4`** for the final container (`-c copy`; mkv is the stated
      safe default if the audio/video codecs are not mp4-safe).
    - ⚠ **Trigger mechanism:** reconciler-driven vs. a systemd `.path` unit
@@ -640,13 +920,22 @@ unit type on speculation.
    Muxed `final_path` files are served through the existing Phase 1
    `GET /recordings/:id/file` route (already built for `.ts`); no separate
    serving-design decision remains.
-2. **File download.** The Phase 1 streaming route already serves the raw bytes,
-   so anyone can `curl -O` or browser-save a file today. Download is therefore a
-   **UI affordance only** — a download link/button in the web client using the
-   same `GET /recordings/:id/file` URL (a same-origin `<a download>`), with **no
-   new backend work**. No `Content-Disposition: attachment` route is added
-   unless a concrete need appears, keeping the streaming route a single code
-   path.
+2. **Download the converted (`mp4`/`mkv`) file.** The Phase 1 streaming route
+   already serves the raw bytes, so download is a **UI affordance only** — a
+   download link/button in the web client using the same `GET /recordings/:id/file`
+   URL (a same-origin `<a download>`), with **no new backend work**. No
+   `Content-Disposition: attachment` route is added unless a concrete need
+   appears, keeping the streaming route a single code path.
+3. **Demux — ⚠ undesigned; needs its own design pass before building.** The owner
+   listed "demux" as a wanted operation, but its product meaning here is not yet
+   defined (what it separates, into what outputs, and how those surface as
+   recordings/files). Do not invent the behaviour — resolve what "demux" means as
+   a feature before planning it.
+4. **30-day trash auto-purge lands here.** The full mechanism is specified in
+   Phase 3 (trash / retention) — deliberately simple, executes on app start with
+   a daily `setInterval`, no reconciler/timer, accepted pitfalls. This phase is
+   where the owner slotted its actual rollout; see Phase 3 for the mechanism and
+   the shared permanent-delete routine it calls.
 
 ### Lowest priority (unordered)
 
@@ -658,24 +947,6 @@ only the live verification step. Schedule a short recording, stop/restart the
 dedicated user manager or reboot `irae-sheeta` during its window, and confirm
 reconciliation resumes appending to the same `.ts` with a recalculated safety
 cap.
-
-**Candidates.** Bulk-import a schedule and promote entries to recordings. Decide
-and document the candidate import format (⚠ JSON array vs. CSV vs. ICS; JSON is
-the default assumption) immediately before building. Add the candidates
-migration, repository, bulk import/list/delete API, and an atomic
-promote-to-recording operation. Acceptance-test candidate promotion and
-concurrent-promotion protection through curl.
-
-**Client-captured thumbnails.** We think this is possible, not yet verified end
-to end: the owner could pause the mpegts.js player at a chosen frame and grab
-it from the `<video>` element via `<canvas>.drawImage()` + `toBlob()`/
-`toDataURL()` — standard, well-established client-side frame capture that
-works on any rendered `<video>` element regardless of how it's fed (MSE via
-mpegts.js is no different from a plain file source for this purpose), and
-isn't blocked by canvas tainting since the video is same-origin. The client
-would POST the captured image to a new endpoint to store as the recording's
-thumbnail. Needs: the new upload endpoint/storage location, and deciding
-whether/how a thumbnail surfaces in the Archive list.
 
 **Firefox playback.** Deliberately dropped for now, not investigated. The
 `RecordingDetail.vue` player (mpegts.js over MSE) has only been verified on
@@ -706,7 +977,7 @@ rather than manual live debugging.
   never for routine API, reconciliation, or recording work.
 - Network attachment is configurable deployment policy. The application does
   not require or modify Tailscale, LAN routing, firewall rules, reverse proxies,
-  or VPS networking. Before any unauthenticated VPS listener is made publicly
-  reachable, the operator must supply an external access boundary or implement
-  the planned authentication seam.
+  or VPS networking. Before any open-access VPS listener is made publicly
+  reachable, the operator must supply an external access boundary (see
+  `spec.md`'s non-goals note).
 - Open decisions in `spec.md` remain open until their owning phase.
