@@ -1,0 +1,82 @@
+# Local Development — Agent Setup
+
+This document covers how to set up and run the development environment locally. Refer to `README.md` for more detailed information on installation, deployment, and configuration.
+
+## Prerequisites
+
+- Node.js 24.x and npm
+- Docker and Docker Buildx (for release builds only, not needed for dev)
+
+## Running the Backend Locally
+
+The backend API and reconciler are Node.js services that connect to SQLite. To start the development server:
+
+```sh
+npm run build
+REC_LIVE_DATA_DIR="$PWD/.local/state" \
+REC_LIVE_RECORDINGS_DIR="$PWD/.local/recordings" \
+REC_LIVE_PRIVATE_SOCKET="$PWD/.local/run/api.sock" \
+npm start
+```
+
+This starts the API listener on the default `0.0.0.0:8787`. The public listener is accessible at `http://localhost:8787`. All `RecLiveData`, recordings, and private socket paths are created under `.local/` in the project directory.
+
+See `.env.example` for all configurable settings.
+
+## Running the Vite Development Server
+
+The client is built with Vue 3 and Vite. To start the dev server for UI work:
+
+```sh
+npm run dev:client
+```
+
+This starts Vite on `http://localhost:5173` by default, with a reverse proxy configured to forward API requests (`/recordings`, `/cookies`, `/health`) to `http://localhost:8787`. Ensure the backend server (above) is running before starting the dev server.
+
+## Building and Testing
+
+Build everything (backend + client):
+
+```sh
+npm run build
+```
+
+This produces:
+- TypeScript compiled to JavaScript in `dist/` (backend)
+- Client built into `dist/public/` via Vite (frontend)
+
+Run the test suite (builds first, then runs tap):
+
+```sh
+npm test
+```
+
+All tests should pass (currently 55/55).
+
+## Quick API Sanity Checks
+
+The backend serves a health check and JSON routes. Examples from `README.md`:
+
+```sh
+curl http://127.0.0.1:8787/health
+
+curl -F 'name=primary' -F 'file=@cookies.txt' http://127.0.0.1:8787/cookies
+curl http://127.0.0.1:8787/cookies
+
+curl -X POST http://127.0.0.1:8787/recordings \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://www.youtube.com/watch?v=example","title":"Live show","start_at":"2026-07-21T20:00:00Z","stop_at":"2026-07-21T22:00:00Z","quality":"720p"}'
+
+curl 'http://127.0.0.1:8787/recordings?status=scheduled'
+curl http://127.0.0.1:8787/recordings/rec-REPLACE_ME
+```
+
+Full API reference and response shapes are documented in `README.md` under "Phase 0 curl API".
+
+## Client Artifacts
+
+The web client is served by the Express API at `/` after the `npm run build` step completes. Vite produces:
+- `dist/public/index.html` — SPA entry point
+- `dist/public/assets/` — hashed CSS and JavaScript bundles
+
+During development, `npm run dev:client` serves unminified assets with hot reload and proxies API calls to the local backend.

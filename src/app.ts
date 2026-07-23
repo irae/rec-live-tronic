@@ -1,6 +1,8 @@
 import type { ErrorRequestHandler, NextFunction, Request, RequestHandler, Response } from "express";
 import express from "express";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { RecorderService } from "./api/service.js";
 
 export class AppError extends Error {
@@ -69,6 +71,12 @@ export function createApp(deps: AppDependencies): express.Express {
 
   if (deps.recorder && !deps.privateApi) addPublicRoutes(app, deps.recorder);
   if (deps.recorder && deps.privateApi) addPrivateRoutes(app, deps.recorder);
+
+  if (!deps.privateApi) {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const publicPath = join(__dirname, "..", "dist", "public");
+    app.use(express.static(publicPath));
+  }
 
   app.use((_request, _response, next) => next(new AppError("NOT_FOUND", 404, "Route not found")));
   app.use(errorHandler as ErrorRequestHandler);
