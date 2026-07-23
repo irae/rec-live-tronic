@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HALŌ — Mainstage — Tronic</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="mast">
+  <span class="brand">Tronic<span class="dot"></span><small>rec&nbsp;·&nbsp;set</small></span>
+  <nav class="nav">
+    <a href="archive.html">Archive</a>
+    <a href="schedule.html">Schedule</a>
+  </nav>
+</header>
+
+<main class="wrap">
+
+  <a class="back" href="archive.html">Back to lineup</a>
+
+  <div class="detail-grid">
+
+    <!-- MEDIA -->
+    <div class="col-media">
+      <div class="player">
+        <div class="frame">
+          <span>Tomorrowland 2026 · Mainstage</span>
+          <span class="rec"><span class="blip"></span>archived</span>
+        </div>
+        <button class="play-btn" aria-label="Play recording"></button>
+        <div class="scrub"><i></i></div>
+      </div>
+
+      <h1 class="detail-title">HALŌ<br>Mainstage Closing</h1>
+
+      <div class="detail-sub">
+        <span class="m">Duration <b>1:58:44</b></span>
+        <span class="m">Quality <b>1080p</b></span>
+        <span class="m">Size <b>5.4 GB</b></span>
+        <span class="m">Recorded <b>Jul 20, 2026</b></span>
+      </div>
+    </div>
+
+    <!-- INFO / ACTIONS -->
+    <div class="col-info">
+
+      <p class="eyebrow">Stream URL</p>
+      <div class="urlbar">
+        <code id="streamurl">https://cdn.tronic.local/sets/halo-mainstage-2026.m3u8</code>
+        <button class="copy" id="copyBtn">Copy</button>
+      </div>
+      <div class="vlc-line">
+        <a class="vlc" href="#">Open in VLC ↗</a>
+        <span class="vlc-note"> — optional, iOS only, best-effort</span>
+      </div>
+
+      <div class="danger">
+        <h3>◆ Danger zone</h3>
+        <p>Deleting removes the recorded file from disk for good. There is no undo and no copy kept anywhere else.</p>
+        <button class="btn btn--danger" id="delBtn">🗑 Delete recording — permanent</button>
+      </div>
+
+    </div>
+
+  </div>
+
+  <footer class="foot">
+    <span>Tronic <span class="dot">●</span> personal stream recorder</span>
+    <span>halo-mainstage-2026.mp4</span>
+  </footer>
+
+</main>
+
+<script>
+  // Small delight only — no framework, no build step.
+  var copyBtn = document.getElementById('copyBtn');
+  copyBtn.addEventListener('click', function () {
+    var url = document.getElementById('streamurl').textContent.trim();
+    var reset = function () { copyBtn.textContent = 'Copy'; copyBtn.classList.remove('done'); };
+    var win = function () { copyBtn.textContent = 'Copied ✓'; copyBtn.classList.add('done'); setTimeout(reset, 1600); };
+    if (navigator.clipboard) { navigator.clipboard.writeText(url).then(win, win); } else { win(); }
+  });
+
+  document.getElementById('delBtn').addEventListener('click', function () {
+    if (confirm('Permanently delete this recording? This cannot be undone.')) {
+      this.textContent = 'Deleted';
+    }
+  });
+</script>
+</body>
+</html>

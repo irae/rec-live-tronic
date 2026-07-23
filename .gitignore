@@ -148,4 +148,6 @@ release/
 agent-communications/
 
 # Design prototypes (static HTML mockups, not shipped)
-design-prototypes/
+design-prototypes/*
+# ...except the winning theme, kept as a reference artifact
+!design-prototypes/theme-3/

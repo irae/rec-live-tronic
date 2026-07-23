@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Schedule — Tronic</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="mast">
+  <span class="brand">Tronic<span class="dot"></span><small>rec&nbsp;·&nbsp;schedule</small></span>
+  <nav class="nav">
+    <a href="archive.html">Archive</a>
+    <a href="schedule.html" aria-current="page">Schedule</a>
+  </nav>
+</header>
+
+<main class="wrap">
+
+  <section class="hero">
+    <h1>Book<br>The Set</h1>
+    <p class="lede">Point Tronic at a stream, pick a window, and it grabs the set while you sleep.</p>
+  </section>
+
+  <div class="split">
+
+    <!-- BOOKING FORM -->
+    <div class="booking">
+      <form class="card" onsubmit="return false">
+        <div class="card__head">New Recording <small>rec.new</small></div>
+        <div class="card__body">
+
+          <div class="field">
+            <label for="url"><span class="num">01</span> · Stream URL</label>
+            <input class="input" id="url" type="url" placeholder="https://youtube.com/watch?v=…" value="https://youtube.com/live/tomorrowland">
+          </div>
+
+          <div class="field">
+            <label for="title"><span class="num">02</span> · Title</label>
+            <input class="input" id="title" type="text" placeholder="Act — Stage — Festival" value="ODESSA KANE — Mainstage — Tomorrowland">
+          </div>
+
+          <div class="field">
+            <label><span class="num">03</span> · Quality</label>
+            <div class="quality">
+              <input type="radio" name="q" id="q1" checked><label for="q1">1080p</label>
+              <input type="radio" name="q" id="q2"><label for="q2">720p</label>
+              <input type="radio" name="q" id="q3"><label for="q3">480p</label>
+              <input type="radio" name="q" id="q4"><label for="q4">Audio only</label>
+            </div>
+          </div>
+
+          <div class="field row2">
+            <div>
+              <label for="start"><span class="num">04</span> · Start</label>
+              <input class="input" id="start" type="text" placeholder="dd/mm hh:mm" value="22/07 21:30">
+            </div>
+            <div>
+              <label for="stop"><span class="num">05</span> · Stop</label>
+              <input class="input" id="stop" type="text" placeholder="dd/mm hh:mm" value="22/07 23:45">
+            </div>
+          </div>
+
+          <div class="field">
+            <button class="btn btn--primary" type="submit">＋ Add to lineup</button>
+          </div>
+
+        </div>
+      </form>
+    </div>
+
+    <!-- QUEUE -->
+    <div class="queue">
+      <p class="eyebrow">On now &amp; upcoming <span class="count">04</span></p>
+
+      <div class="timetable">
+
+        <!-- LIVE -->
+        <article class="slot slot--live">
+          <div class="slot__top">
+            <div>
+              <div class="slot__title">HALŌ b2b ODESSA KANE</div>
+              <div class="slot__meta">Mainstage · Tomorrowland · 1080p</div>
+            </div>
+            <span class="state state--live"><span class="blip"></span>Rec</span>
+          </div>
+          <div class="prog"><i></i></div>
+          <div class="slot__meta mono">01:12:38 recorded · ends ~23:45</div>
+          <div class="actions">
+            <button class="tbtn tbtn--stop">■ Stop early</button>
+            <button class="tbtn">Edit</button>
+          </div>
+        </article>
+
+        <!-- SCHEDULED -->
+        <article class="slot slot--sched">
+          <div class="slot__top">
+            <div>
+              <div class="slot__title">VELVET AXIS</div>
+              <div class="slot__meta">Freedom Stage · Tomorrowland · 1080p</div>
+            </div>
+            <span class="state state--sched">Scheduled</span>
+          </div>
+          <div class="slot__meta mono">Tonight 21:30 → 23:45 · in 2h 4m</div>
+          <div class="actions">
+            <button class="tbtn tbtn--go">▶ Start now</button>
+            <button class="tbtn">Edit</button>
+            <button class="tbtn">Cancel</button>
+          </div>
+        </article>
+
+        <article class="slot slot--sched">
+          <div class="slot__top">
+            <div>
+              <div class="slot__title">SLOW METEOR</div>
+              <div class="slot__meta">Freedom Stage · EDC · 720p</div>
+            </div>
+            <span class="state state--sched">Scheduled</span>
+          </div>
+          <div class="slot__meta mono">Tomorrow 04:00 → 07:00 · sunrise set</div>
+          <div class="actions">
+            <button class="tbtn tbtn--go">▶ Start now</button>
+            <button class="tbtn">Edit</button>
+            <button class="tbtn">Cancel</button>
+          </div>
+        </article>
+
+        <article class="slot slot--sched">
+          <div class="slot__top">
+            <div>
+              <div class="slot__title">ATLAS + THE GRID</div>
+              <div class="slot__meta">Mainstage · Awakenings · 1080p</div>
+            </div>
+            <span class="state state--sched">Scheduled</span>
+          </div>
+          <div class="slot__meta mono">Sat 23:00 → 01:30</div>
+          <div class="actions">
+            <button class="tbtn tbtn--go">▶ Start now</button>
+            <button class="tbtn">Edit</button>
+            <button class="tbtn">Cancel</button>
+          </div>
+        </article>
+
+      </div>
+    </div>
+
+  </div>
+
+  <footer class="foot">
+    <span>Tronic <span class="dot">●</span> personal stream recorder</span>
+    <span>1 recording · 3 queued</span>
+  </footer>
+
+</main>
+</body>
+</html>
