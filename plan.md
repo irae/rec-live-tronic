@@ -353,10 +353,17 @@ sketch (pending owner review); this block fixes only its scope and boundaries.
 2. **Full scheduling CRUD** as an API client over the Phase 0 routes: create,
    edit, cancel, stop early, and start immediately. No new backend behaviour —
    these map onto existing schedule/PATCH/cancel operations.
-3. **Native playback.** A basic HTML5 `<video>` element pointed at the Phase 1
+3. **Delete a finished recording's file**, part of the same CRUD surface, via
+   `DELETE /recordings/:id/file`. This manual delete is the **only** deletion
+   mechanism in the system; there is no age/size-based automated cleanup
+   anywhere. It deletes the target recording's own file(s); derived recordings
+   (trim/split outputs, once Phase 3 exists) are independent rows deleted on
+   their own. Extend the functional server suite (test name only):
+   `t.test("deletes a finished recording's file on explicit request")`.
+4. **Native playback.** A basic HTML5 `<video>` element pointed at the Phase 1
    `GET /recordings/:id/file` route, using the browser's built-in controls — no
    custom JS player.
-4. Verify the client against real recordings and confirm no operation requires a
+5. Verify the client against real recordings and confirm no operation requires a
    browser-only path (curl parity preserved).
 
 #### Phase 2 design sketch — DRAFT, pending owner review
@@ -365,19 +372,44 @@ sketch (pending owner review); this block fixes only its scope and boundaries.
 > design or an implementation-ready plan.** ~5-minute read. Nothing here is
 > built until the owner picks a theme (gate below) and signs off.
 
-**Shape.** One small single-page app served by the existing `web` service off
-the same public API — no second service, no build-heavy framework. Two views:
-an **archive list** (finished recordings, newest first, tap to open detail) and
-a **schedule** view (the create form + upcoming/running list with inline
-edit/cancel/stop-early/start-now). A recording **detail** panel holds the
-player and the share affordances below. Keep it plain: server-rendered or a
-tiny amount of vanilla JS/fetch against the JSON API, not a SPA framework unless
-the theme chosen below argues for one.
+**Shape.** One small client served by the existing `web` service off the same
+public API — no second service. Three views: an **archive list** (finished
+recordings, newest first, tap to open detail), a **schedule** view (the create
+form + upcoming/running list with inline edit/cancel/stop-early/start-now), and
+a recording **detail** panel holding the player and the share affordances below.
+
+**Dependencies (decision).** **No new npm dependencies.** Plain vanilla
+JavaScript with `fetch` against the existing JSON API, plain hand-written CSS,
+static assets served by the `web` Express app. No SPA framework, no bundler, no
+CSS framework — per the simplicity guidelines this app is small enough that a
+framework is pure liability. (Playwright is already the test tool and is
+dev-only; it adds no runtime dependency.) If a chosen prototype theme somehow
+argued for more, that is a decision to re-open explicitly with the owner, not a
+default.
 
 **Mobile-first, genuinely responsive.** Design at phone width first (single
 column, thumb-reachable actions), then let it breathe on desktop (list + detail
 side by side past a breakpoint). Not a phone-only site scaled up — desktop is a
 first-class second target, just not the starting point.
+
+**API mapping (existing Phase 0/1 routes only — no new endpoints).** The list
+route filters by a **single** status (`GET /recordings?status=<one>`), so the
+simplest client fetches `GET /recordings` once and partitions client-side rather
+than issuing multiple filtered calls.
+- **Archive list** → `GET /recordings`, keep rows with status `recorded`
+  (finished/streamable), newest first.
+- **Schedule view** → same `GET /recordings`, keep `scheduled` + `recording` for
+  the upcoming/running list; **create** → `POST /recordings`; **edit** →
+  `PATCH /recordings/:id`; **cancel** → `DELETE /recordings/:id`; **stop early**
+  → `PATCH /recordings/:id` setting `stop_at` to now (allowed while `recording`);
+  **start now** → `PATCH /recordings/:id` setting `start_at` to now (while
+  `scheduled`). No dedicated start/stop endpoints exist or are added.
+- **Detail / player** → `GET /recordings/:id` for metadata; the Phase 1
+  `GET /recordings/:id/file` URL is both the `<video>` `src` and the string the
+  copy-URL button places on the clipboard (the file route serves `recorded`
+  files and `409`s otherwise, so the player only appears for finished rows).
+  **Delete** → `DELETE /recordings/:id/file` (the only deletion mechanism; no
+  automated cleanup).
 
 **Playback + share affordances (recording detail).**
 - **Native player.** HTML5 `<video controls>` at the Phase 1
@@ -404,24 +436,55 @@ first-class second target, just not the starting point.
   single-file `sendFile()` route already built and verified, and contradicts the
   simplicity guidelines for a marginal gain.)
 
-**Design-prototype gate (before any real implementation).** Produce **three
-competing static-HTML visual themes** — full look-and-feel mockups with dummy
-data, no backend wiring — in a **git-ignored folder** (e.g. `design-prototypes/`,
-added to `.gitignore`) so the owner can open each in a browser and pick one.
-Real Phase 2 implementation does not start until the owner selects a theme; the
-chosen theme's HTML/CSS becomes the styling basis, the other two are discarded.
+**Execution sequence (draft).** The design-prototype gate (step 2) is a pause
+point *within* implementation, not the finish line — real building continues
+past it.
 
-**Testing approach.** Playwright, deliberately light. Use Playwright's built-in
-**iPhone device profile** (e.g. `devices['iPhone 13']`) for basic mobile-viewport
-emulation of the core flows (list loads, schedule create, open detail, player
-present, copy-URL works), plus a desktop-viewport pass. This is smoke-level
-device emulation, **not** exhaustive cross-device/browser mobile QA.
+1. Add a static-asset route/dir to the `web` Express app to serve the client
+   (`index.html` + one CSS + one JS file), and confirm it loads with placeholder
+   data driven by the real `GET /recordings` response.
+2. **Design-prototype gate.** Produce **three competing static-HTML visual
+   themes** — full look-and-feel mockups with dummy data, no backend wiring — in
+   a **git-ignored folder** (e.g. `design-prototypes/`, added to `.gitignore`) so
+   the owner opens each in a browser and picks one. **Pause here for the owner's
+   pick;** the chosen theme's HTML/CSS becomes the styling basis and the other
+   two are discarded. Later steps build on the winner.
+3. Build the chosen theme's real markup + CSS into the client, mobile-first with
+   the desktop breakpoint (list + detail side by side past it).
+4. Wire the **archive list** and **schedule** views to their endpoints per the
+   API mapping above (single `GET /recordings` fetch + client-side partition;
+   create/edit/cancel; stop-early and start-now as `PATCH`es).
+5. Build the **detail** view: `<video controls>` at `GET /recordings/:id/file`,
+   the always-present copy-URL button, and the optional iOS-only "Open in VLC"
+   `vlc-x-callback` link framed as best-effort.
+6. **Playwright smoke pass.** Deliberately light: Playwright's built-in iPhone
+   device profile (e.g. `devices['iPhone 13']`) over the core flows (list loads,
+   schedule create, open detail, player present, copy-URL works), plus a
+   desktop-viewport pass. Smoke-level device emulation, **not** exhaustive
+   cross-device/browser mobile QA.
+
+**Acceptance criteria (draft — what "Phase 2 done" looks like).**
+- [ ] Schedule, edit, cancel, stop-early, and start-now all work from the UI
+      against real recordings on `irae-sheeta`.
+- [ ] Archive view lists finished (`recorded`) recordings and plays them in the
+      native `<video>` player.
+- [ ] Deleting a finished recording's file works from the UI (no manual SSH
+      SQL/`rm` needed).
+- [ ] Copy-URL puts a working `GET /recordings/:id/file` stream URL on the
+      clipboard that opens in VLC's *Open Network Stream*.
+- [ ] The optional iOS "Open in VLC" link is present on iOS only and degrades
+      silently to copy-URL when it doesn't fire.
+- [ ] Phone-width and post-breakpoint desktop layouts are both verified.
+- [ ] Playwright's iPhone-profile pass and desktop pass are green.
+- [ ] No operation requires a browser-only path — curl parity holds, matching
+      the committed Phase 2 scope block above.
+- [ ] No new npm runtime dependency was added.
 
 ### Phase 3 — file operations
 
 **Complexity: Medium.** Non-destructive derived-recording operations over
-already-finished files, plus explicit deletion. None of this touches the
-recorder core.
+already-finished files. None of this touches the recorder core. (Deleting a
+finished recording's file moved to Phase 2 alongside the other CRUD.)
 
 Trim and split follow the **derived-recording-row** pattern: each produces one
 or more new recording rows with their own server-generated IDs whose output
@@ -462,13 +525,7 @@ never shell fragments.
    recordings. All-or-nothing: publish the derived rows finished only when every
    segment cut succeeds; on any failure preserve every file and leave the failed
    derived rows `failed`.
-3. **Delete** — explicit file-delete behaviour for finished recordings via
-   `DELETE /recordings/:id/file` (the route `spec.md` reserves for this phase).
-   This manual delete is the **only** deletion mechanism in the system; there is
-   no age/size-based automated cleanup at any priority. It deletes the target
-   recording's own file(s); derived recordings are independent rows deleted on
-   their own.
-4. Derived recordings are listed, served, and themselves re-trimmable/re-
+3. Derived recordings are listed, served, and themselves re-trimmable/re-
    splittable exactly like any other recording through the existing
    `GET /recordings/:id/file` route — no new serving path is introduced. Extend
    the functional server suite (test names only):
@@ -479,7 +536,6 @@ t.test("trims a finished recording into a new derived recording");
 t.test("splits a finished recording into multiple derived recordings");
 t.test("rejects a trim or split of a source that is not finished");
 t.test("leaves the source recording's row and file untouched after trim/split");
-t.test("deletes a finished recording's file on explicit request");
 ```
 
 ### Phase 4 — conversion and download
