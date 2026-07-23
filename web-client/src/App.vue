@@ -2,7 +2,7 @@
   <div id="app" class="app">
     <header class="mast">
       <span class="brand">
-        <span class="brand-accent">Rec</span>Tronic<span class="dot"></span>
+        <span class="brand-word"><span class="brand-accent">Rec</span>Tronic</span><span class="dot"></span>
         <small>rec · {{ route.name === 'archive' ? 'archive' : route.name === 'schedule' ? 'schedule' : 'set' }}</small>
       </span>
       <nav class="nav">

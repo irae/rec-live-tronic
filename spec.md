@@ -123,6 +123,8 @@ Ops: `GET /health` · `GET /recordings/:id/log` (tail streamlink output).
 
 *Resolved: file sharing / network URL — a static Express file route (`GET /recordings/:id/file`), finished files only, built in Phase 1 (see plan.md). No Jellyfin/nginx/Samba.*
 
+*Resolved: mpegts.js seekable duration for finished `.ts` recordings — not pursued further, dropped as best-effort. Traced both of the library's duration-override paths (`overridedDuration`/the `duration` MediaDataSource field, and the internal `_updateMediaSourceDuration` mechanism) and confirmed neither applies to MPEG-TS: the former is implemented only by mpegts.js's FLV demuxer, the latter only fires for a Safari `audio/mpeg` edge case. The library exposes no public access to the underlying `MediaSource` object either, so there's no supported way to force an accurate seek range up front without patching the library. Decision: keep `lazyLoad: true` (required for scalability against multi-GB recordings) and accept that duration/seek-to-end only becomes fully accurate as more of the file is demuxed — not forced.*
+
 ## Non-goals (MVP)
 
 Auth, transcoding, retention automation, and any UI. Reliability of `.ts` capture comes first; everything else layers on without touching the record path.

@@ -46,8 +46,8 @@
           <button class="copy" @click="copyUrl" :class="{ done: copyDone }">{{ copyDone ? "Copied ✓" : "Copy" }}</button>
         </div>
         <div class="vlc-line">
-          <a v-if="isIos || isMac" class="vlc" :href="vlcUrl">Open in VLC ↗</a>
-          <span v-if="isIos || isMac" class="vlc-note"> — optional, best-effort, may not always work</span>
+          <a v-if="isIos" class="vlc" :href="vlcUrl">Open in VLC ↗</a>
+          <span v-if="isIos" class="vlc-note"> — optional, iOS only, best-effort</span>
         </div>
 
         <div class="danger">
@@ -134,16 +134,14 @@ function destroyPlayer(): void {
 function setupPlayer(): void {
   destroyPlayer();
   if (!useMpegts || !videoEl.value || !streamUrl.value || !recording.value) return;
-  // mpegts.js's `duration` MediaDataSource field (overridedDuration) is only
-  // implemented by its FLV demuxer, not the MPEG-TS one we use here -- it's a
-  // silent no-op for `type: "mpegts"`. The real fix: mpegts.js accumulates
-  // total duration from demuxed segments as it loads, but `lazyLoad` (default
-  // true) only keeps ~3 min of data ahead, so a finished file's tail stays
-  // un-demuxed (and un-seekable) until played that far. These are finished,
-  // fixed-size recordings, not live tails, so load the whole thing up front.
+  // Accurate seek-to-end duration isn't forceable for MPEG-TS in this library
+  // (see spec.md's "Open decisions" -- both of its duration-override paths are
+  // dead ends for our demuxer). Dropped as best-effort: default lazyLoad keeps
+  // this scalable against multi-GB recordings; duration/seek just becomes
+  // fully accurate progressively as more of the file is demuxed.
   player = mpegts.createPlayer(
     { type: "mpegts", url: streamUrl.value, isLive: false },
-    { lazyLoad: false },
+    {},
   );
   player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
     console.error("mpegts.js playback error:", type, detail);
@@ -156,15 +154,7 @@ const isIos = computed(() => {
   return /iPad|iPhone|iPod/.test(navigator.userAgent);
 });
 
-// iPadOS 13+ Safari reports its userAgent as a plain Mac, so exclude the
-// touch-capable "MacIntel" case (real Macs aren't multi-touch) to avoid
-// mistaking an iPad for a desktop Mac.
-const isMac = computed(() => {
-  return !isIos.value && /Macintosh|Mac OS X/.test(navigator.userAgent) && navigator.maxTouchPoints <= 1;
-});
-
 const vlcUrl = computed(() => {
-  if (isMac.value) return `vlc://${streamUrl.value}`;
   return `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(streamUrl.value)}`;
 });
 
