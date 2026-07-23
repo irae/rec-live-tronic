@@ -1,36 +1,81 @@
 <template>
   <div class="recording-detail">
-    <button class="back-button" @click="goBack">← Back</button>
-    <div v-if="recording" class="detail-content">
-      <h2>{{ recording.title }}</h2>
-      <div class="meta">
-        <p><strong>Status:</strong> {{ recording.status }}</p>
-        <p><strong>URL:</strong> {{ recording.url }}</p>
-        <p><strong>Quality:</strong> {{ recording.quality }}</p>
-        <p><strong>Starts:</strong> {{ recording.start_at }}</p>
-        <p><strong>Ends:</strong> {{ recording.stop_at }}</p>
+    <a class="back" href="#" @click.prevent="goBack">Back to lineup</a>
+
+    <div v-if="recording" class="detail-grid">
+      <!-- MEDIA -->
+      <div class="col-media">
+        <div class="player">
+          <div class="frame">
+            <span>{{ recording.event || "Event" }} · {{ recording.stage || "Stage" }}</span>
+            <span class="rec"><span class="blip"></span>archived</span>
+          </div>
+          <button class="play-btn" aria-label="Play recording"></button>
+          <div class="scrub"><i></i></div>
+        </div>
+
+        <h1 class="detail-title">{{ recording.title }}<br></h1>
+
+        <div class="detail-sub">
+          <span class="m">Duration <b>{{ formatDuration(recording.duration) }}</b></span>
+          <span class="m">Quality <b>{{ recording.quality || "n/a" }}</b></span>
+          <span class="m">Size <b>{{ recording.size || "n/a" }}</b></span>
+          <span class="m">Recorded <b>{{ formatDate(recording.recorded_at) }}</b></span>
+        </div>
       </div>
-      <div v-if="recording.status === 'recorded'" class="actions">
-        <button @click="copyUrl" class="btn-primary">Copy Stream URL</button>
-        <button @click="deleteRecording" class="btn-danger">Delete</button>
+
+      <!-- INFO / ACTIONS -->
+      <div class="col-info">
+        <p class="eyebrow">Stream URL</p>
+        <div class="urlbar">
+          <code id="streamurl">{{ recording.stream_url || "https://example.com/stream.m3u8" }}</code>
+          <button class="copy" @click="copyUrl" :class="{ done: copyDone }">{{ copyDone ? "Copied ✓" : "Copy" }}</button>
+        </div>
+        <div class="vlc-line">
+          <a class="vlc" href="#" @click.prevent="">Open in VLC ↗</a>
+          <span class="vlc-note"> — optional, iOS only, best-effort</span>
+        </div>
+
+        <div class="danger">
+          <h3>◆ Danger zone</h3>
+          <p>Deleting removes the recorded file from disk for good. There is no undo and no copy kept anywhere else.</p>
+          <button class="btn btn--danger" @click="askDelete">🗑 Delete recording — permanent</button>
+        </div>
       </div>
     </div>
+
     <div v-else class="loading">Loading...</div>
+
+    <ConfirmDialog
+      :is-open="showDeleteConfirm"
+      title="Delete recording"
+      message="Permanently delete this recording? This cannot be undone."
+      confirm-label="Delete"
+      @confirm="confirmDelete"
+      @cancel="showDeleteConfirm = false"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { api } from "../api";
+import ConfirmDialog from "../components/ConfirmDialog.vue";
 
 interface Recording {
   id: string;
-  url: string;
+  url?: string;
   title: string;
   status: string;
-  start_at: string;
-  stop_at: string;
-  quality: string;
+  start_at?: string;
+  stop_at?: string;
+  quality?: string;
+  duration?: string | number;
+  size?: string;
+  event?: string;
+  stage?: string;
+  recorded_at?: string;
+  stream_url?: string;
 }
 
 interface Props {
@@ -43,6 +88,8 @@ const emit = defineEmits<{
 }>();
 
 const recording = ref<Recording | null>(null);
+const copyDone = ref(false);
+const showDeleteConfirm = ref(false);
 
 onMounted(async () => {
   if (!props.recordingId) return;
@@ -58,96 +105,406 @@ function goBack(): void {
 }
 
 function copyUrl(): void {
-  if (!props.recordingId) return;
-  const url = `http://localhost:8787/recordings/${props.recordingId}/file`;
-  navigator.clipboard.writeText(url);
-  alert("URL copied to clipboard");
+  if (!recording.value) return;
+  const url = recording.value.stream_url || `http://localhost:8787/recordings/${props.recordingId}/file`;
+  navigator.clipboard.writeText(url).then(() => {
+    copyDone.value = true;
+    setTimeout(() => {
+      copyDone.value = false;
+    }, 1600);
+  });
 }
 
-async function deleteRecording(): Promise<void> {
-  if (!props.recordingId || !confirm("Delete this recording?")) return;
+function askDelete(): void {
+  showDeleteConfirm.value = true;
+}
+
+async function confirmDelete(): Promise<void> {
+  if (!props.recordingId) return;
   try {
     await api.cancelRecording(props.recordingId);
+    showDeleteConfirm.value = false;
     emit("back");
   } catch (error) {
     console.error("Failed to delete recording:", error);
+    showDeleteConfirm.value = false;
   }
+}
+
+function formatDuration(duration?: string | number): string {
+  if (!duration) return "—";
+  if (typeof duration === "string") return duration;
+  const hours = Math.floor(duration / 3600);
+  const minutes = Math.floor((duration % 3600) / 60);
+  const seconds = Math.floor(duration % 60);
+  return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatDate(dateStr?: string): string {
+  if (!dateStr) return "N/A";
+  const date = new Date(dateStr);
+  return date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
 }
 </script>
 
 <style scoped>
 .recording-detail {
-  padding: 1rem;
-  background: white;
-  border-radius: 8px;
-  max-width: 600px;
-}
-
-.back-button {
-  background: none;
-  border: none;
-  color: #007bff;
-  cursor: pointer;
-  font-size: 1rem;
   padding: 0;
-  margin-bottom: 1rem;
 }
 
-.back-button:hover {
-  text-decoration: underline;
+.back {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--ink-soft);
+  margin: 24px 0 0;
 }
 
-.recording-detail h2 {
-  margin: 0 0 1rem 0;
+.back:hover {
+  color: var(--fluoro);
 }
 
-.meta {
-  background: #f9f9f9;
-  padding: 1rem;
-  border-radius: 4px;
-  margin-bottom: 1rem;
+.back::before {
+  content: "←";
 }
 
-.meta p {
-  margin: 0.5rem 0;
-  font-size: 0.95rem;
+.detail-grid {
+  display: grid;
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr);
 }
 
-.actions {
+.player {
+  position: relative;
+  aspect-ratio: 16/9;
+  width: 100%;
+  border: 2.5px solid var(--line);
+  box-shadow: var(--sh);
+  background:
+    repeating-linear-gradient(45deg, rgba(23,20,42,.04) 0 12px, transparent 12px 24px),
+    linear-gradient(150deg, #241f3d, #17142A 55%, #2a1550);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+
+.player::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255,255,255,.10) 0.7px, transparent 0.8px);
+  background-size: 6px 6px;
+}
+
+.player .frame {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  right: 12px;
   display: flex;
-  gap: 0.5rem;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: rgba(255,255,255,.72);
 }
 
-.btn-primary,
-.btn-danger {
-  padding: 0.5rem 1rem;
+.player .frame .rec {
+  color: var(--fluoro);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.player .frame .rec .blip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--fluoro);
+}
+
+.play-btn {
+  position: relative;
+  z-index: 2;
+  width: 84px;
+  height: 84px;
+  border-radius: 50%;
+  background: var(--fluoro);
   border: none;
-  border-radius: 4px;
   cursor: pointer;
-  font-weight: 500;
+  display: grid;
+  place-items: center;
+  box-shadow: 0 0 0 6px rgba(255,59,31,.22), 6px 6px 0 rgba(0,0,0,.35);
+  transition: transform .15s ease;
 }
 
-.btn-primary {
-  background: #007bff;
-  color: white;
+.play-btn:hover {
+  transform: scale(1.06);
 }
 
-.btn-primary:hover {
-  background: #0056b3;
+.play-btn::before {
+  content: "";
+  width: 0;
+  height: 0;
+  margin-left: 6px;
+  border-left: 26px solid #fff;
+  border-top: 16px solid transparent;
+  border-bottom: 16px solid transparent;
 }
 
-.btn-danger {
-  background: #dc3545;
-  color: white;
+.player .scrub {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  height: 6px;
+  background: rgba(255,255,255,.18);
+  border-radius: 3px;
+  overflow: hidden;
 }
 
-.btn-danger:hover {
-  background: #c82333;
+.player .scrub > i {
+  position: absolute;
+  inset: 0;
+  right: 64%;
+  background: var(--fluoro);
+}
+
+.detail-title {
+  font-family: var(--disp);
+  text-transform: uppercase;
+  font-weight: 400;
+  font-size: clamp(34px, 10vw, 66px);
+  line-height: .88;
+  letter-spacing: .01em;
+  margin: 4px 0 0;
+}
+
+.detail-sub {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 12px;
+}
+
+.detail-sub .m {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.detail-sub .m b {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.col-info {
+  min-width: 0;
+}
+
+.eyebrow {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px 0;
+}
+
+.eyebrow::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  background: var(--line);
+}
+
+.urlbar {
+  display: flex;
+  gap: 0;
+  border: 2.5px solid var(--line);
+  box-shadow: var(--sh);
+  background: var(--paper-2);
+  align-items: stretch;
+  margin-bottom: 10px;
+}
+
+.urlbar code {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 12px 14px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow-x: auto;
+  display: flex;
+  align-items: center;
+}
+
+.urlbar .copy {
+  border: none;
+  border-left: 2.5px solid var(--line);
+  background: var(--violet);
+  color: #fff;
+  cursor: pointer;
+  font-family: var(--ui);
+  font-weight: 700;
+  font-size: 12.5px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  padding: 0 18px;
+  white-space: nowrap;
+  transition: background .12s;
+}
+
+.urlbar .copy:hover {
+  background: var(--violet-d);
+}
+
+.urlbar .copy.done {
+  background: var(--fluoro);
+}
+
+.vlc-line {
+  margin-bottom: 30px;
+}
+
+.vlc {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: .04em;
+  color: var(--ink-soft);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-style: dotted;
+  cursor: pointer;
+}
+
+.vlc:hover {
+  color: var(--violet);
+}
+
+.vlc-note {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: #8b8598;
+  letter-spacing: .06em;
+}
+
+.danger {
+  margin-top: 30px;
+  border: 2.5px dashed var(--fluoro);
+  padding: 16px;
+  background:
+    repeating-linear-gradient(45deg, rgba(255,59,31,.055) 0 10px, transparent 10px 20px);
+}
+
+.danger h3 {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--fluoro);
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.danger p {
+  margin: 0 0 12px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  max-width: 46ch;
+}
+
+.btn {
+  font-family: var(--ui);
+  font-weight: 700;
+  font-size: 13.5px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+  border: 2.5px solid var(--line);
+  border-radius: 0;
+  padding: 12px 18px;
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: var(--paper);
+  color: var(--ink);
+  transition: transform .12s ease, box-shadow .12s ease, background .12s;
+  width: 100%;
+}
+
+.btn:hover {
+  transform: translate(-2px, -2px);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+
+.btn:active {
+  transform: translate(0, 0);
+  box-shadow: 1px 1px 0 var(--ink);
+}
+
+.btn--danger {
+  background: var(--paper);
+  color: var(--fluoro);
+  border-color: var(--fluoro);
+}
+
+.btn--danger:hover {
+  background: var(--fluoro);
+  color: #fff;
+  box-shadow: 4px 4px 0 var(--ink);
 }
 
 .loading {
   text-align: center;
-  color: #666;
+  color: var(--ink-soft);
   padding: 2rem;
+}
+
+@media (min-width: 768px) {
+  .detail-sub .m {
+    font-size: 12px;
+  }
+}
+
+@media (min-width: 900px) {
+  .detail-grid {
+    grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .detail-grid .col-media {
+    grid-column: 1;
+  }
+
+  .detail-grid .col-info {
+    grid-column: 2;
+    position: sticky;
+    top: 88px;
+  }
 }
 </style>

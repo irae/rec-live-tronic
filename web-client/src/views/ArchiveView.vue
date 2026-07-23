@@ -1,31 +1,41 @@
 <template>
   <div class="archive-view">
-    <h2>Archive</h2>
-    <p v-if="!recordings.length" class="empty">No finished recordings yet.</p>
-    <div v-else class="recordings-list">
-      <div v-for="rec in recordings" :key="rec.id" class="recording-item" @click="selectRecording(rec.id)">
-        <h3>{{ rec.title }}</h3>
-        <p>{{ rec.status }}</p>
-      </div>
-    </div>
+    <section class="hero">
+      <span class="stamp"><span class="blip"></span>captured live</span>
+      <h1>Your<br>Lineup</h1>
+      <p class="lede">Every set you pulled off the stream, kept as a file you own. Newest at the top of the bill.</p>
+    </section>
+
+    <p class="eyebrow">Recorded sets <span class="count">{{ recordings.length }}</span></p>
+
+    <RecordingList
+      :recordings="recordings"
+      :empty-message="recordings.length === 0 ? 'No finished recordings yet.' : ''"
+      @select="selectRecording"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, onMounted } from "vue";
 import { api } from "../api";
+import RecordingList from "../components/RecordingList.vue";
 
 interface Recording {
   id: string;
   title: string;
-  status: string;
+  stage?: string;
+  event?: string;
+  duration?: string;
+  quality?: string;
+  recorded_at?: string;
 }
 
 defineProps<{
   selectedId: string | null;
 }>();
 
-defineEmits<{
+const emit = defineEmits<{
   selectRecording: [id: string];
 }>();
 
@@ -41,52 +51,85 @@ onMounted(async () => {
 });
 
 function selectRecording(id: string): void {
-  // Emits to parent
+  emit("selectRecording", id);
 }
 </script>
 
 <style scoped>
 .archive-view {
-  padding: 1rem;
+  padding: 0;
 }
 
-.archive-view h2 {
-  margin: 0 0 1rem 0;
+.hero {
+  padding: 30px 0 6px;
 }
 
-.empty {
-  color: #666;
-  font-style: italic;
+.hero h1 {
+  font-family: var(--disp);
+  font-weight: 400;
+  text-transform: uppercase;
+  font-size: clamp(46px, 15vw, 118px);
+  line-height: .86;
+  letter-spacing: .01em;
+  margin: 8px 0 0;
 }
 
-.recordings-list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
-  gap: 1rem;
+.hero .lede {
+  max-width: 40ch;
+  margin: 16px 0 0;
+  font-size: 15px;
+  color: var(--ink-soft);
 }
 
-.recording-item {
-  background: white;
-  padding: 1rem;
-  border-radius: 8px;
-  border: 1px solid #ddd;
-  cursor: pointer;
-  transition: all 0.2s;
+.stamp {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--fluoro);
+  border: 2px solid var(--fluoro);
+  padding: 5px 10px;
+  transform: rotate(-2.5deg);
 }
 
-.recording-item:hover {
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-  transform: translateY(-2px);
+.stamp .blip {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--fluoro);
+  animation: pulse 1.3s infinite;
 }
 
-.recording-item h3 {
-  margin: 0 0 0.5rem 0;
-  font-size: 1rem;
+.eyebrow {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .22em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 34px 0 16px;
 }
 
-.recording-item p {
-  margin: 0;
-  font-size: 0.875rem;
-  color: #666;
+.eyebrow::after {
+  content: "";
+  flex: 1;
+  height: 2px;
+  background: var(--line);
+}
+
+.eyebrow .count {
+  color: var(--fluoro);
+}
+
+@keyframes pulse {
+  0%,100% { opacity:1; transform:scale(1); }
+  50% { opacity:.35; transform:scale(.7); }
 }
 </style>
