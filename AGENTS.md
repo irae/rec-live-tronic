@@ -5,6 +5,7 @@ This document covers how to set up and run the development environment locally. 
 ## Best practices:
 
 - Never swallow a real error silently — `console.error` it server-side before returning a friendly/generic message to the client.
+- For player/UI bugs you can't verify statically: start `npm start` + `npm run dev:client` and ask the user to check it live in their browser — especially anything involving the `<video>` player.
 
 ## Prerequisites
 
