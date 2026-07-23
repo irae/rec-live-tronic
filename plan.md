@@ -168,9 +168,15 @@ The repository currently contains no application scaffold. Phase 0 creates:
   listing, starting, stopping, and inspecting only derived `rec-*` user units.
 - `src/reconciler/streamlink-command.ts`: `buildStreamlinkArgs(recording,
   cookie, config)` and transient-unit property construction.
-- `scripts/install-root.sh`: short, auditable, idempotent host provisioning and
-  release installation script intended to be reviewed and run manually as
-  root.
+- `scripts/install-root.sh`: short, auditable root-side installer, reviewed and
+  run manually. A full run provisions the host and installs all three packages;
+  piece flags (`--deps`, `--web`, `--reconciler`) do a fast partial redeploy of
+  only the named packages on an already-provisioned host. Every selected package
+  is extracted and replaced unconditionally, with no change detection.
+- `scripts/install-sheeta.sh`: personal one-command local wrapper for the owner's
+  `irae-sheeta` host that scps the artifacts plus `install-root.sh` and runs it
+  over SSH; supports the same full and partial-piece flags. Deliberately absent
+  from the README, which documents only the host-agnostic install path.
 - `systemd/rec-live-tronic-api.service`,
   `systemd/rec-live-tronic-reconciler.service`, and
   `systemd/rec-live-tronic-reconciler.timer`: root-owned system units for the

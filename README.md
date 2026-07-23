@@ -163,14 +163,7 @@ direct read/write media access.
 
 ```sh
 scp rec-live-tronic-*.tar.gz remote:/tmp/
-ssh -t remote 'mkdir -p /tmp/install-$$ && cd /tmp/install-$$ && tar -xzf /tmp/rec-live-tronic-deps.tar.gz && tar -xzf /tmp/rec-live-tronic-web.tar.gz && tar -xzf /tmp/rec-live-tronic-reconciler.tar.gz && sudo bash web/install-root.sh --force --media-user irae --deps-artifact /tmp/rec-live-tronic-deps.tar.gz --web-artifact /tmp/rec-live-tronic-web.tar.gz --reconciler-artifact /tmp/rec-live-tronic-reconciler.tar.gz'
-```
-
-Or use the automated `install-sheeta.sh` script (update `REMOTE_HOST` and
-`REMOTE_USER` as needed):
-
-```sh
-scripts/install-sheeta.sh
+ssh -t remote 'mkdir -p /tmp/install-$$ && cd /tmp/install-$$ && tar -xzf /tmp/rec-live-tronic-deps.tar.gz && tar -xzf /tmp/rec-live-tronic-web.tar.gz && tar -xzf /tmp/rec-live-tronic-reconciler.tar.gz && sudo bash web/install-root.sh --media-user irae --deps-artifact /tmp/rec-live-tronic-deps.tar.gz --web-artifact /tmp/rec-live-tronic-web.tar.gz --reconciler-artifact /tmp/rec-live-tronic-reconciler.tar.gz'
 ```
 
 Use the real account name as one argument (for example `--media-user irae`);
@@ -228,16 +221,19 @@ systemctl start rec-live-tronic-api.service
 ```
 
 For a full release update (code and dependencies), run the installer with all
-three artifacts as in the initial installation. For code-only updates (when
-`package-lock.json` has not changed), use the faster `deploy-fast.sh` script
-to update only the `web` and/or `reconciler` packages:
+three artifacts as in the initial installation. For a partial update on an
+already-provisioned host, pass one or more piece flags (`--deps`, `--web`,
+`--reconciler`) to install only those packages, skipping the preflight,
+account, and directory work. Reinstalling `web` or `deps` restarts the API;
+`reconciler` is timer-driven and only reloaded:
 
 ```sh
-sudo scripts/deploy-fast.sh --web-artifact /path/to/rec-live-tronic-web.tar.gz
+scp rec-live-tronic-web.tar.gz scripts/install-root.sh remote:/tmp/
+ssh -t remote 'sudo /tmp/install-root.sh --web --web-artifact /tmp/rec-live-tronic-web.tar.gz'
 curl http://127.0.0.1:8787/health
 ```
 
-The installer and `deploy-fast.sh` replace each package directory in place
+Every selected package directory is replaced in place, unconditionally and
 without versioning or `current` symlinks. Rollback requires reverting to an
 earlier release and running its installation step again; note that database
 migrations are forward-only and cannot be reversed.
