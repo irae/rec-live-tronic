@@ -74,6 +74,7 @@ export async function reconcileOnce(now: Date, bootId: string, deps: ReconcileDe
   const recordings = deps.recordings.list();
   const nowMs = now.getTime();
   for (const recording of recordings) {
+    if (recording.trashedAt !== null) continue;
     const start = Date.parse(recording.startAt);
     const stop = Date.parse(recording.stopAt);
     const live = units.has(recording.unitName);

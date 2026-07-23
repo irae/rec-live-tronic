@@ -187,3 +187,25 @@ t.test("live stop-time updates relaunch only after a confirmed stop", async (t) 
     t.equal(recordings.getById(created.id)?.lastStartedStopAt, blockedStop);
   } finally { apiDatabase.close(); }
 });
+
+t.test("reconciler ignores a trashed recording even if its window is still active", async (t) => {
+  const start = new Date(Date.now() + 60_000).toISOString();
+  const stop = new Date(Date.now() + 120_000).toISOString();
+  const created = await createRecording(start, stop);
+  const row = recordings.getById(created.id);
+  if (!row) throw new Error("missing trashed recording");
+  const beforeStarts = systemd.starts.length;
+  const beforeStops = systemd.stops.length;
+  const beforeTransitions = 0;
+  const apiDatabase = openDatabase(config.databasePath);
+  try {
+    apiDatabase.prepare("UPDATE recordings SET trashed_at = ? WHERE id = ?").run(Date.now(), created.id);
+    const trashedRow = recordings.getById(created.id);
+    if (!trashedRow) throw new Error("trashed recording not found");
+    t.ok(trashedRow.trashedAt !== null, "recording should be marked as trashed");
+    await tick(new Date(Date.now() + 70_000).toISOString());
+    t.equal(systemd.starts.length, beforeStarts, "no start should be called for trashed recording");
+    t.equal(systemd.stops.length, beforeStops, "no stop should be called for trashed recording");
+    t.equal(recordings.getById(created.id)?.status, "scheduled", "status should remain unchanged");
+  } finally { apiDatabase.close(); }
+});

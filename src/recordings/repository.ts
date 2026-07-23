@@ -18,6 +18,7 @@ export interface Recording {
   url: string;
   title: string;
   stage: string | null;
+  trashedAt: string | null;
   cookieId: string | null;
   cookiePath: string | null;
   quality: string;
@@ -72,6 +73,7 @@ interface RecordingRow {
   url: string;
   title: string;
   stage: string | null;
+  trashed_at: number | null;
   cookie_id: string | null;
   cookie_path: string | null;
   quality: string;
@@ -88,7 +90,7 @@ interface RecordingRow {
 }
 
 const selectColumns = `
-  SELECT recordings.id, recordings.url, recordings.title, recordings.stage, recordings.cookie_id, cookies.path AS cookie_path,
+  SELECT recordings.id, recordings.url, recordings.title, recordings.stage, recordings.trashed_at, recordings.cookie_id, cookies.path AS cookie_path,
          recordings.quality, recordings.start_at, recordings.stop_at, recordings.status, recordings.unit_name,
          recordings.ts_path, recordings.last_started_boot_id, recordings.last_started_stop_at, recordings.version, recordings.created_at, recordings.updated_at
   FROM recordings LEFT JOIN cookies ON cookies.id = recordings.cookie_id`;
@@ -112,6 +114,7 @@ function mapRecording(row: RecordingRow): Recording {
     url: row.url,
     title: row.title,
     stage: row.stage,
+    trashedAt: row.trashed_at === null ? null : toRfc3339(row.trashed_at),
     cookieId: row.cookie_id,
     cookiePath: row.cookie_path,
     quality: row.quality,
