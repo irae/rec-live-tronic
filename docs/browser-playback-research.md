@@ -246,6 +246,28 @@ This is not a marginal improvement or premature optimization — per the correct
 
 ---
 
+## Addendum: client-side transmuxing (mpegts.js) as an alternative to server-side remux
+
+After the corrections above, the owner raised a genuinely competitive alternative: instead of (or before) building the server-side `ffmpeg -c copy` remux worker, use a small client-side JS library — [`mpegts.js`](https://github.com/xqq/mpegts.js) — that transmuxes raw MPEG-TS to fragmented MP4 in the browser via Media Source Extensions, and attaches to a plain `<video>` element in place of a bare `src`.
+
+**Health check (verified, not assumed):** `mpegts.js` is actively maintained — ~2.2k GitHub stars, latest release v1.8.0 (Dec 2025), ongoing PR/issue activity, and that release specifically added iOS Safari support via Apple's `ManagedMediaSource` API plus AV1-over-MPEG-TS support. This is a solid, current, well-used library, not an abandoned one.
+
+**Why it's a strong fit for this app specifically, arguably better than the server remux plan:**
+- **No server-side work, no new backend infra.** No remux worker, no systemd unit, no `muxed` status, no `mkv` vs `mp4` decision to resolve — it's a frontend-only change (`RecordingDetail.vue` + one new npm dependency).
+- **No disk duplication.** The server remux plan keeps the original `.ts` as source of truth and additionally writes a `.mp4`/`.mkv` per finished recording — mpegts.js needs none of that; it plays the existing `.ts` as-is.
+- **Can play `recording`-status (still-growing) files, not just `recorded` ones.** mpegts.js's primary use case is exactly this shape of problem (a raw, single/live MPEG-TS stream) — this is something the server remux approach explicitly *cannot* do (§5: remuxing a growing file is unreliable, industry practice is finished-files-only). If the owner ever wants to preview a recording while it's still capturing, this is the only approach of the two that can do it.
+- **Already-existing `GET /recordings/:id/file` route (with HTTP range support) is reusable as-is** — mpegts.js's default loader can range-fetch for seeking within a finished file, so the existing file-serving route likely doesn't need to change.
+
+**What it doesn't replace:** VLC's *Open Network Stream* and direct downloads already work fine against the raw `.ts` today — VLC/ffplay/mpv all handle MPEG-TS natively without any library. The browser-playback problem is specific to the plain HTML5 `<video>` element with no JS involved. A server-side remux would still be independently useful later if the owner ever wants a portable/final-container file for other purposes (archival, external sharing) — but that's a separate motivation from "make in-browser playback work," and isn't required to solve *this* problem.
+
+**Recommendation:** this looks like the better first move — smaller, frontend-only, no new backend complexity, and it also covers in-progress playback for free. The server-side remux (Phase 3, already planned) can stay on the roadmap independently for whoever eventually wants finished, portable container files, decoupled from the browser-playback problem this addendum solves more directly.
+
+**Not yet decided:** whether to proceed with implementing mpegts.js integration — this section documents the option and the tradeoff, the actual go/no-go and implementation is a separate step.
+
+- [mpegts.js — HTML5 MPEG-TS Stream Player (health-checked above)](https://github.com/xqq/mpegts.js)
+
+---
+
 ## References and Sources
 
 - [Chromium dev group — enabling single-.ts playback in Chromium](https://groups.google.com/a/chromium.org/g/chromium-dev/c/1tBgPWRGKgw) — confirms no native path for a bare `.ts` file.
