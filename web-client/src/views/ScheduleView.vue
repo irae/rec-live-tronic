@@ -134,7 +134,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted, computed } from "vue";
+import { ref, reactive, onMounted, onUnmounted, computed } from "vue";
 import { api } from "../api";
 
 interface Recording {
@@ -175,7 +175,7 @@ const displayedRecordings = computed(() => {
   );
 });
 
-onMounted(async () => {
+async function fetchRecordings(): Promise<void> {
   try {
     error.value = null;
     const all = await api.listRecordings();
@@ -185,6 +185,15 @@ onMounted(async () => {
     error.value =
       err instanceof Error ? err.message : "Failed to load recordings";
   }
+}
+
+onMounted(async () => {
+  await fetchRecordings();
+  const pollInterval = setInterval(fetchRecordings, 5000);
+
+  onUnmounted(() => {
+    clearInterval(pollInterval);
+  });
 });
 
 async function handleAddRecording(): Promise<void> {
