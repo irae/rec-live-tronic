@@ -74,6 +74,14 @@ class ApiClient {
       throw new Error(data.error?.message ?? "Failed to cancel recording");
     }
   }
+
+  async deleteRecordingFile(id: string): Promise<void> {
+    const response = await fetch(`/recordings/${id}/file`, { method: "DELETE" });
+    if (!response.ok) {
+      const data = (await response.json()) as { error?: ApiError };
+      throw new Error(data.error?.message ?? "Failed to delete recording file");
+    }
+  }
 }
 
 export const api = new ApiClient();

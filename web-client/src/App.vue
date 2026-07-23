@@ -12,9 +12,9 @@
     </header>
 
     <main class="wrap">
-      <ArchiveView v-show="view === 'archive'" @select-recording="selectRecording" :selected-id="selectedId" />
+      <ArchiveView :key="refreshKey" v-show="view === 'archive'" @select-recording="selectRecording" :selected-id="selectedId" />
       <ScheduleView v-show="view === 'schedule'" @select-recording="selectRecording" :selected-id="selectedId" />
-      <RecordingDetail v-show="view === 'detail'" :recording-id="selectedId" @back="view = 'archive'" />
+      <RecordingDetail v-show="view === 'detail'" :recording-id="selectedId" @back="view = 'archive'" @deleted="refreshKey++" />
     </main>
 
     <footer class="foot">
@@ -32,6 +32,7 @@ import RecordingDetail from "./views/RecordingDetail.vue";
 
 const view = ref("archive");
 const selectedId = ref<string | null>(null);
+const refreshKey = ref(0);
 
 function selectRecording(id: string): void {
   selectedId.value = id;

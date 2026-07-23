@@ -5,22 +5,30 @@
     <div v-if="recording" class="detail-grid">
       <!-- MEDIA -->
       <div class="col-media">
-        <div class="player">
+        <div v-if="recording.status === 'recorded'" class="player">
           <div class="frame">
-            <span>{{ recording.event || "Event" }} · {{ recording.stage || "Stage" }}</span>
+            <span>{{ extractFestival(recording.title) ? extractFestival(recording.title) : recording.stage || "Stage" }}</span>
             <span class="rec"><span class="blip"></span>archived</span>
           </div>
-          <button class="play-btn" aria-label="Play recording"></button>
-          <div class="scrub"><i></i></div>
+          <video :src="streamUrl" controls class="video-player"></video>
+        </div>
+        <div v-else class="player player--placeholder">
+          <div class="frame">
+            <span>{{ recording.stage || "Stage" }}</span>
+            <span class="rec"><span class="blip"></span>archived</span>
+          </div>
+          <div class="not-ready">
+            <p>Recording not ready to play yet.</p>
+            <p class="status">Status: <b>{{ formatStatus(recording.status) }}</b></p>
+          </div>
         </div>
 
         <h1 class="detail-title">{{ recording.title }}<br></h1>
 
         <div class="detail-sub">
-          <span class="m">Duration <b>{{ formatDuration(recording.duration) }}</b></span>
+          <span class="m">Duration <b>{{ computeDuration(recording.startAt, recording.stopAt) }}</b></span>
           <span class="m">Quality <b>{{ recording.quality || "n/a" }}</b></span>
-          <span class="m">Size <b>{{ recording.size || "n/a" }}</b></span>
-          <span class="m">Recorded <b>{{ formatDate(recording.recorded_at) }}</b></span>
+          <span class="m">Recorded <b>{{ formatDate(recording.startAt) }}</b></span>
         </div>
       </div>
 
@@ -28,11 +36,11 @@
       <div class="col-info">
         <p class="eyebrow">Stream URL</p>
         <div class="urlbar">
-          <code id="streamurl">{{ recording.stream_url || "https://example.com/stream.m3u8" }}</code>
+          <code id="streamurl">{{ streamUrl }}</code>
           <button class="copy" @click="copyUrl" :class="{ done: copyDone }">{{ copyDone ? "Copied ✓" : "Copy" }}</button>
         </div>
         <div class="vlc-line">
-          <a class="vlc" href="#" @click.prevent="">Open in VLC ↗</a>
+          <a v-if="isIos" class="vlc" :href="vlcUrl">Open in VLC ↗</a>
           <span class="vlc-note"> — optional, iOS only, best-effort</span>
         </div>
 
@@ -58,24 +66,23 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, onMounted, computed } from "vue";
 import { api } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 
 interface Recording {
   id: string;
-  url?: string;
+  url: string;
   title: string;
   status: string;
-  start_at?: string;
-  stop_at?: string;
-  quality?: string;
-  duration?: string | number;
-  size?: string;
-  event?: string;
-  stage?: string;
-  recorded_at?: string;
-  stream_url?: string;
+  stage: string | null;
+  quality: string;
+  startAt: string;
+  stopAt: string;
+  cookieId: string | null;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface Props {
@@ -85,11 +92,25 @@ interface Props {
 const props = defineProps<Props>();
 const emit = defineEmits<{
   back: [];
+  deleted: [];
 }>();
 
 const recording = ref<Recording | null>(null);
 const copyDone = ref(false);
 const showDeleteConfirm = ref(false);
+
+const streamUrl = computed(() => {
+  if (!props.recordingId) return "";
+  return `${window.location.origin}/recordings/${props.recordingId}/file`;
+});
+
+const isIos = computed(() => {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent);
+});
+
+const vlcUrl = computed(() => {
+  return `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(streamUrl.value)}`;
+});
 
 onMounted(async () => {
   if (!props.recordingId) return;
@@ -105,9 +126,7 @@ function goBack(): void {
 }
 
 function copyUrl(): void {
-  if (!recording.value) return;
-  const url = recording.value.stream_url || `http://localhost:8787/recordings/${props.recordingId}/file`;
-  navigator.clipboard.writeText(url).then(() => {
+  navigator.clipboard.writeText(streamUrl.value).then(() => {
     copyDone.value = true;
     setTimeout(() => {
       copyDone.value = false;
@@ -122,8 +141,9 @@ function askDelete(): void {
 async function confirmDelete(): Promise<void> {
   if (!props.recordingId) return;
   try {
-    await api.cancelRecording(props.recordingId);
+    await api.deleteRecordingFile(props.recordingId);
     showDeleteConfirm.value = false;
+    emit("deleted");
     emit("back");
   } catch (error) {
     console.error("Failed to delete recording:", error);
@@ -131,19 +151,44 @@ async function confirmDelete(): Promise<void> {
   }
 }
 
-function formatDuration(duration?: string | number): string {
-  if (!duration) return "—";
-  if (typeof duration === "string") return duration;
-  const hours = Math.floor(duration / 3600);
-  const minutes = Math.floor((duration % 3600) / 60);
-  const seconds = Math.floor(duration % 60);
+function extractFestival(title: string): string | null {
+  const parts = title.split(" - ");
+  if (parts.length === 3) {
+    return parts[2].trim();
+  }
+  return null;
+}
+
+function computeDuration(startAt: string, stopAt: string): string {
+  const start = new Date(startAt).getTime();
+  const stop = new Date(stopAt).getTime();
+  const diffMs = stop - start;
+  if (diffMs <= 0) return "—";
+
+  const diffSec = Math.floor(diffMs / 1000);
+  const hours = Math.floor(diffSec / 3600);
+  const minutes = Math.floor((diffSec % 3600) / 60);
+  const seconds = Math.floor(diffSec % 60);
   return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-function formatDate(dateStr?: string): string {
+function formatDate(dateStr: string): string {
   if (!dateStr) return "N/A";
   const date = new Date(dateStr);
   return date.toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+}
+
+function formatStatus(status: string): string {
+  const statusMap: Record<string, string> = {
+    scheduled: "Scheduled",
+    recording: "Recording",
+    recorded: "Recorded",
+    muxed: "Muxed",
+    cancelled: "Cancelled",
+    failed: "Failed",
+    missed: "Missed",
+  };
+  return statusMap[status] || status;
 }
 </script>
 
@@ -276,6 +321,39 @@ function formatDate(dateStr?: string): string {
   inset: 0;
   right: 64%;
   background: var(--fluoro);
+}
+
+.video-player {
+  width: 100%;
+  height: 100%;
+  background: #000;
+}
+
+.player--placeholder {
+  align-items: flex-start;
+  padding-top: 60px;
+}
+
+.not-ready {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.8);
+  font-size: 16px;
+  font-family: var(--ui);
+}
+
+.not-ready p {
+  margin: 8px 0;
+}
+
+.not-ready .status {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.6);
+  margin-top: 12px;
+}
+
+.not-ready b {
+  color: rgba(255, 255, 255, 0.9);
 }
 
 .detail-title {
