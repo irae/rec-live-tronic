@@ -677,6 +677,15 @@ would POST the captured image to a new endpoint to store as the recording's
 thumbnail. Needs: the new upload endpoint/storage location, and deciding
 whether/how a thumbnail surfaces in the Archive list.
 
+**Firefox playback.** Deliberately dropped for now, not investigated. The
+`RecordingDetail.vue` player (mpegts.js over MSE) has only been verified on
+Chromium-based browsers and Safari; Firefox was reported broken (loaded a
+CSP-blocked error page, likely Firefox's own internal interstitial rather
+than anything our app sends — we confirmed no CSP header exists anywhere in
+this app) and set aside rather than chased live. Fix eventually using the
+existing Playwright e2e harness (`test/e2e/`) with a Firefox project added,
+rather than manual live debugging.
+
 ## Operational invariants
 
 - SQLite is durable truth and queue; systemd units are disposable projections.
