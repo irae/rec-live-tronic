@@ -260,7 +260,7 @@ async function fetchRecordings(): Promise<void> {
 
 onMounted(async () => {
   await fetchRecordings();
-  const pollInterval = setInterval(fetchRecordings, 5000);
+  const pollInterval = setInterval(fetchRecordings, 120_000);
 
   onUnmounted(() => {
     clearInterval(pollInterval);
