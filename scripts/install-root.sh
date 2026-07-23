@@ -86,7 +86,7 @@ service_uid=$(id -u "$SERVICE_USER")
 log "create configuration and application paths"
 install -d -o root -g root -m 0755 "$PREFIX"
 install -d -o root -g "$SERVICE_GROUP" -m 0750 "$CONFIG_DIR"
-install -d -o "$SERVICE_USER" -g "$MEDIA_GROUP" -m 0770 "$DATA_DIR" "$DATA_DIR/cookies"
+install -d -o "$SERVICE_USER" -g "$MEDIA_GROUP" -m 2770 "$DATA_DIR" "$DATA_DIR/cookies"
 install -d -o "$SERVICE_USER" -g "$MEDIA_GROUP" -m 2770 "$RECORDINGS_DIR"
 
 log "extract and install deps package"
@@ -199,8 +199,8 @@ systemctl enable --now "$SERVICE-reconciler.timer"
 
 log "post-install verification"
 systemctl is-active --quiet "$SERVICE-api.service"; systemctl is-active --quiet "$SERVICE-reconciler.timer"
-test "$(stat -c '%U:%G %a' "$DATA_DIR")" = "$SERVICE_USER:$MEDIA_GROUP 770" || die "incorrect data directory mode"
-test "$(stat -c '%U:%G %a' "$DATA_DIR/cookies")" = "$SERVICE_USER:$MEDIA_GROUP 770" || die "incorrect cookies directory mode"
+test "$(stat -c '%U:%G %a' "$DATA_DIR")" = "$SERVICE_USER:$MEDIA_GROUP 2770" || die "incorrect data directory mode"
+test "$(stat -c '%U:%G %a' "$DATA_DIR/cookies")" = "$SERVICE_USER:$MEDIA_GROUP 2770" || die "incorrect cookies directory mode"
 test "$(stat -c '%U:%G %a' "$RECORDINGS_DIR")" = "$SERVICE_USER:$MEDIA_GROUP 2770" || die "incorrect recordings directory mode"
 if ! wait_for_private_socket; then
   systemctl --no-pager --full status "$SERVICE-api.service" >&2 || true
