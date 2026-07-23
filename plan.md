@@ -666,6 +666,17 @@ migration, repository, bulk import/list/delete API, and an atomic
 promote-to-recording operation. Acceptance-test candidate promotion and
 concurrent-promotion protection through curl.
 
+**Client-captured thumbnails.** We think this is possible, not yet verified end
+to end: the owner could pause the mpegts.js player at a chosen frame and grab
+it from the `<video>` element via `<canvas>.drawImage()` + `toBlob()`/
+`toDataURL()` — standard, well-established client-side frame capture that
+works on any rendered `<video>` element regardless of how it's fed (MSE via
+mpegts.js is no different from a plain file source for this purpose), and
+isn't blocked by canvas tainting since the video is same-origin. The client
+would POST the captured image to a new endpoint to store as the recording's
+thumbnail. Needs: the new upload endpoint/storage location, and deciding
+whether/how a thumbnail surfaces in the Archive list.
+
 ## Operational invariants
 
 - SQLite is durable truth and queue; systemd units are disposable projections.
