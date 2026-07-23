@@ -5,6 +5,11 @@
         <span class="brand-word"><span class="brand-accent">Rec</span>Tronic</span><span class="dot"></span>
         <small>rec · {{ route.name === 'archive' ? 'archive' : route.name === 'schedule' ? 'schedule' : route.name === 'trash' ? 'trash' : 'set' }}</small>
       </span>
+      <div v-if="diskSpace" class="disk">
+        <span class="disk__item"><b>{{ formatBytes(diskSpace.actualBytes) }}</b> free</span>
+        <span class="disk__item disk__item--soft"><b>{{ formatBytes(diskSpace.projectedBytes) }}</b> after captures</span>
+      </div>
+
       <nav class="nav">
         <router-link :to="{ name: 'archive' }" :aria-current="route.name === 'archive' ? 'page' : undefined">Archive</router-link>
         <router-link :to="{ name: 'schedule' }" :aria-current="route.name === 'schedule' ? 'page' : undefined">Schedule</router-link>
@@ -25,8 +30,16 @@
 
 <script setup lang="ts">
 import { useRoute } from "vue-router";
+import { diskSpace } from "./api";
 
 const route = useRoute();
+
+function formatBytes(bytes: number): string {
+  const gb = bytes / 1_073_741_824;
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  const mb = bytes / 1_048_576;
+  return `${mb.toFixed(0)} MB`;
+}
 </script>
 
 <style>
@@ -77,6 +90,7 @@ a { color: inherit; text-decoration: none; }
 
 .mast {
   display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   padding: 16px var(--edge);
   border-bottom: 2.5px solid var(--line);
@@ -84,6 +98,33 @@ a { color: inherit; text-decoration: none; }
   position: sticky; top: 0; z-index: 40;
   background-image: radial-gradient(var(--ink) 0.6px, transparent 0.7px);
   background-size: 7px 7px;
+}
+
+.disk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  order: 3;
+  flex-basis: 100%;
+}
+
+.disk__item b { color: var(--ink); font-weight: 700; }
+
+.disk__item--soft { color: var(--ink-soft); opacity: .8; }
+
+@media (min-width: 700px) {
+  .disk {
+    order: 0;
+    flex-basis: auto;
+    flex: 1;
+    justify-content: center;
+  }
 }
 
 .brand {

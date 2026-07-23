@@ -1,4 +1,6 @@
-interface Recording {
+import { ref } from "vue";
+
+export interface Recording {
   id: string;
   url: string;
   title: string;
@@ -8,9 +10,15 @@ interface Recording {
   startAt: string;
   stopAt: string;
   status: string;
+  trashedAt: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DiskSpace {
+  actualBytes: number;
+  projectedBytes: number;
 }
 
 interface ApiError {
@@ -18,16 +26,35 @@ interface ApiError {
   message: string;
 }
 
+// Populated as a side effect of any /recordings list call, which always
+// carries the current disk-space figures. Shared so the App.vue header can
+// show it without a second poll loop.
+export const diskSpace = ref<DiskSpace | null>(null);
+
 class ApiClient {
-  async listRecordings(status?: string): Promise<Recording[]> {
-    const url = status ? `/recordings?status=${encodeURIComponent(status)}` : "/recordings";
+  private async fetchList(url: string, errorMessage: string): Promise<Recording[]> {
     const response = await fetch(url);
     if (!response.ok) {
       const data = (await response.json()) as { error?: ApiError };
-      throw new Error(data.error?.message ?? "Failed to list recordings");
+      throw new Error(data.error?.message ?? errorMessage);
     }
-    const data = (await response.json()) as { recordings: Recording[] };
+    const data = (await response.json()) as {
+      recordings: Recording[];
+      disk?: { actual_bytes: number; projected_bytes: number };
+    };
+    if (data.disk) {
+      diskSpace.value = { actualBytes: data.disk.actual_bytes, projectedBytes: data.disk.projected_bytes };
+    }
     return data.recordings;
+  }
+
+  async listRecordings(status?: string): Promise<Recording[]> {
+    const url = status ? `/recordings?status=${encodeURIComponent(status)}` : "/recordings";
+    return this.fetchList(url, "Failed to list recordings");
+  }
+
+  async listTrashedRecordings(): Promise<Recording[]> {
+    return this.fetchList("/recordings?trashed=true", "Failed to list trash");
   }
 
   async getRecording(id: string): Promise<Recording> {
@@ -80,6 +107,24 @@ class ApiClient {
     if (!response.ok) {
       const data = (await response.json()) as { error?: ApiError };
       throw new Error(data.error?.message ?? "Failed to delete recording file");
+    }
+  }
+
+  async restoreRecording(id: string): Promise<Recording> {
+    const response = await fetch(`/recordings/${id}/restore`, { method: "POST" });
+    if (!response.ok) {
+      const data = (await response.json()) as { error?: ApiError };
+      throw new Error(data.error?.message ?? "Failed to restore recording");
+    }
+    const data = (await response.json()) as { recording: Recording };
+    return data.recording;
+  }
+
+  async permanentlyDeleteRecording(id: string): Promise<void> {
+    const response = await fetch(`/recordings/${id}/trash`, { method: "DELETE" });
+    if (!response.ok) {
+      const data = (await response.json()) as { error?: ApiError };
+      throw new Error(data.error?.message ?? "Failed to permanently delete recording");
     }
   }
 }

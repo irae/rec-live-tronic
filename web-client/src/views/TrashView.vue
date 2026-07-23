@@ -8,6 +8,8 @@
 
     <p class="eyebrow">Trashed sets <span class="count">{{ trashedRecordings.length }}</span></p>
 
+    <div v-if="error" class="error-message">{{ error }}</div>
+
     <div class="bin" v-if="trashedRecordings.length > 0">
       <article v-for="rec in trashedRecordings" :key="rec.id" class="crate">
         <div class="crate__top">
@@ -27,118 +29,120 @@
         <div class="crate__facts">
           <span class="fact">Recorded <b>{{ formatDate(rec.startAt) }}</b></span>
           <span class="fact">Trashed <b>{{ relativeTime(rec.trashedAt) }}</b></span>
-          <span class="fact">Size <b>{{ formatSize(rec.fileSizeBytes) }}</b></span>
         </div>
 
         <div class="crate__purge">
-          Auto-purges in <b>{{ daysUntil(rec.purgeAt) }}</b> — permanent delete cannot be undone after that
+          Auto-purges in <b>{{ daysUntil(purgeAt(rec.trashedAt)) }}</b> — permanent delete cannot be undone after that
         </div>
 
         <div class="actions">
-          <button class="tbtn tbtn--go" @click.prevent>↺ Restore</button>
-          <button class="tbtn tbtn--stop" @click.prevent>🗑 Delete forever</button>
+          <button
+            class="tbtn tbtn--go"
+            :disabled="restoringIds.has(rec.id) || deletingIds.has(rec.id)"
+            @click.prevent="handleRestore(rec.id)"
+          >↺ {{ restoringIds.has(rec.id) ? "Restoring…" : "Restore" }}</button>
+          <button
+            class="tbtn tbtn--stop"
+            :disabled="restoringIds.has(rec.id) || deletingIds.has(rec.id)"
+            @click.prevent="askDeleteForever(rec.id)"
+          >🗑 {{ deletingIds.has(rec.id) ? "Deleting…" : "Delete forever" }}</button>
         </div>
       </article>
     </div>
-    <div v-else class="empty-state">
+    <div v-else-if="!loading" class="empty-state">
       <p>Nothing in the bin. Trashed sets show up here before they're gone for good.</p>
     </div>
+
+    <ConfirmDialog
+      :is-open="confirmDeleteId !== null"
+      title="Delete forever"
+      :message="`Permanently delete “${confirmDeleteTitle}”? This cannot be undone.`"
+      confirm-label="Delete forever"
+      @confirm="confirmDeleteForever"
+      @cancel="confirmDeleteId = null"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
-// Static stub data — no backend support for trash yet. Fields mirror the real
-// Recording shape (see api.ts) plus placeholder trash-only fields
-// (trashedAt/purgeAt/fileSizeBytes) that a later phase will replace with the
-// real thing. Restore / Delete forever are visual only, not wired.
-interface TrashedRecording {
-  id: string;
-  url: string;
-  title: string;
-  stage: string | null;
-  cookieId: string | null;
-  quality: string;
-  startAt: string;
-  stopAt: string;
-  status: string;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
+import { ref, computed, onMounted, onUnmounted } from "vue";
+import { api, type Recording } from "../api";
+import ConfirmDialog from "../components/ConfirmDialog.vue";
+
+interface TrashedRecording extends Recording {
   trashedAt: string;
-  purgeAt: string;
-  fileSizeBytes: number;
 }
 
-const trashedRecordings: TrashedRecording[] = [
-  {
-    id: "rec-a1b2c3",
-    url: "https://www.youtube.com/watch?v=stub001",
-    title: "Nightcrawler - Main Stage - Voidfest",
-    stage: "Main Stage",
-    cookieId: null,
-    quality: "1080p",
-    startAt: "2026-07-18T20:00:00Z",
-    stopAt: "2026-07-18T22:15:00Z",
-    status: "recorded",
-    version: 3,
-    createdAt: "2026-07-18T19:50:00Z",
-    updatedAt: "2026-07-21T09:12:00Z",
-    trashedAt: "2026-07-21T09:12:00Z",
-    purgeAt: "2026-08-04T09:12:00Z",
-    fileSizeBytes: 4831838208,
-  },
-  {
-    id: "rec-d4e5f6",
-    url: "https://www.youtube.com/watch?v=stub002",
-    title: "Low Signal - B Stage - Voidfest",
-    stage: "B Stage",
-    cookieId: null,
-    quality: "720p",
-    startAt: "2026-07-19T18:30:00Z",
-    stopAt: "2026-07-19T19:45:00Z",
-    status: "recorded",
-    version: 1,
-    createdAt: "2026-07-19T18:20:00Z",
-    updatedAt: "2026-07-22T14:03:00Z",
-    trashedAt: "2026-07-22T14:03:00Z",
-    purgeAt: "2026-08-05T14:03:00Z",
-    fileSizeBytes: 1042503680,
-  },
-  {
-    id: "rec-g7h8i9",
-    url: "https://www.youtube.com/watch?v=stub003",
-    title: "Test capture — bad cookie",
-    stage: null,
-    cookieId: "cookie-primary",
-    quality: "480p",
-    startAt: "2026-07-20T10:00:00Z",
-    stopAt: "2026-07-20T10:02:00Z",
-    status: "failed",
-    version: 1,
-    createdAt: "2026-07-20T09:58:00Z",
-    updatedAt: "2026-07-22T22:30:00Z",
-    trashedAt: "2026-07-22T22:30:00Z",
-    purgeAt: "2026-08-05T22:30:00Z",
-    fileSizeBytes: 18874368,
-  },
-  {
-    id: "rec-j1k2l3",
-    url: "https://www.youtube.com/watch?v=stub004",
-    title: "Static Hymn - Main Stage - Voidfest",
-    stage: "Main Stage",
-    cookieId: null,
-    quality: "1080p",
-    startAt: "2026-07-15T21:00:00Z",
-    stopAt: "2026-07-15T23:30:00Z",
-    status: "recorded",
-    version: 2,
-    createdAt: "2026-07-15T20:50:00Z",
-    updatedAt: "2026-07-16T08:00:00Z",
-    trashedAt: "2026-07-16T08:00:00Z",
-    purgeAt: "2026-07-30T08:00:00Z",
-    fileSizeBytes: 6710886400,
-  },
-];
+const trashedRecordings = ref<TrashedRecording[]>([]);
+const loading = ref(true);
+const error = ref<string | null>(null);
+const restoringIds = ref<Set<string>>(new Set());
+const deletingIds = ref<Set<string>>(new Set());
+const confirmDeleteId = ref<string | null>(null);
+
+const confirmDeleteTitle = computed(() => {
+  return trashedRecordings.value.find((rec) => rec.id === confirmDeleteId.value)?.title ?? "";
+});
+
+async function fetchTrashed(): Promise<void> {
+  try {
+    error.value = null;
+    const all = await api.listTrashedRecordings();
+    trashedRecordings.value = all.filter(
+      (rec): rec is TrashedRecording => rec.trashedAt !== null,
+    );
+  } catch (err) {
+    console.error("Failed to load trash:", err);
+    error.value = err instanceof Error ? err.message : "Failed to load trash";
+  } finally {
+    loading.value = false;
+  }
+}
+
+onMounted(async () => {
+  await fetchTrashed();
+  const pollInterval = setInterval(fetchTrashed, 60_000);
+
+  onUnmounted(() => {
+    clearInterval(pollInterval);
+  });
+});
+
+async function handleRestore(id: string): Promise<void> {
+  restoringIds.value.add(id);
+  try {
+    error.value = null;
+    await api.restoreRecording(id);
+    trashedRecordings.value = trashedRecordings.value.filter((rec) => rec.id !== id);
+  } catch (err) {
+    console.error("Failed to restore recording:", err);
+    error.value = err instanceof Error ? err.message : "Failed to restore recording";
+  } finally {
+    restoringIds.value.delete(id);
+  }
+}
+
+function askDeleteForever(id: string): void {
+  error.value = null;
+  confirmDeleteId.value = id;
+}
+
+async function confirmDeleteForever(): Promise<void> {
+  const id = confirmDeleteId.value;
+  confirmDeleteId.value = null;
+  if (!id) return;
+  deletingIds.value.add(id);
+  try {
+    error.value = null;
+    await api.permanentlyDeleteRecording(id);
+    trashedRecordings.value = trashedRecordings.value.filter((rec) => rec.id !== id);
+  } catch (err) {
+    console.error("Failed to permanently delete recording:", err);
+    error.value = err instanceof Error ? err.message : "Failed to permanently delete recording";
+  } finally {
+    deletingIds.value.delete(id);
+  }
+}
 
 function extractFestival(title: string): string | null {
   const parts = title.split(" - ");
@@ -162,18 +166,16 @@ function relativeTime(dateStr: string): string {
   return `${diffDays}d ago`;
 }
 
+// Mirrors the backend's 30-day auto-sweep window (RecorderService.autoSweepTrash).
+function purgeAt(trashedAtStr: string): string {
+  return new Date(new Date(trashedAtStr).getTime() + 30 * 24 * 60 * 60 * 1000).toISOString();
+}
+
 function daysUntil(dateStr: string): string {
   const diffMs = new Date(dateStr).getTime() - Date.now();
   const diffDays = Math.ceil(diffMs / 86_400_000);
   if (diffDays <= 0) return "< 1 day";
   return `${diffDays}d`;
-}
-
-function formatSize(bytes: number): string {
-  const gb = bytes / 1_073_741_824;
-  if (gb >= 1) return `${gb.toFixed(1)} GB`;
-  const mb = bytes / 1_048_576;
-  return `${mb.toFixed(0)} MB`;
 }
 </script>
 
@@ -247,6 +249,17 @@ function formatSize(bytes: number): string {
 
 .eyebrow .count {
   color: var(--fluoro);
+}
+
+.error-message {
+  background: var(--paper-2);
+  border: 2px solid var(--fluoro);
+  color: var(--fluoro);
+  padding: 12px;
+  margin-bottom: 16px;
+  font-family: var(--mono);
+  font-size: 12px;
+  letter-spacing: 0.08em;
 }
 
 .bin {
@@ -370,12 +383,19 @@ function formatSize(bytes: number): string {
   transform: translate(-1px, -1px);
 }
 
+.tbtn:disabled {
+  opacity: .5;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
 .tbtn--go {
   border-color: var(--violet);
   color: var(--violet);
 }
 
-.tbtn--go:hover {
+.tbtn--go:hover:not(:disabled) {
   background: var(--violet);
   color: #fff;
   box-shadow: 2px 2px 0 var(--ink);
@@ -386,7 +406,7 @@ function formatSize(bytes: number): string {
   color: var(--fluoro);
 }
 
-.tbtn--stop:hover {
+.tbtn--stop:hover:not(:disabled) {
   background: var(--fluoro);
   color: #fff;
   box-shadow: 2px 2px 0 var(--ink);

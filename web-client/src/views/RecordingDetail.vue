@@ -51,10 +51,10 @@
         </div>
 
         <div class="danger">
-          <h3>◆ Danger zone</h3>
-          <p>Deleting removes the recorded file from disk for good. There is no undo and no copy kept anywhere else.</p>
+          <h3>◆ Remove recording</h3>
+          <p>Moves this recording to Trash. It stays there for 30 days — restore it any time, or purge it for good from the Trash view.</p>
           <p v-if="deleteError" class="danger-error">{{ deleteError }}</p>
-          <button class="btn btn--danger" @click="askDelete">🗑 Delete recording — permanent</button>
+          <button class="btn btn--danger" @click="askDelete">🗑 Delete recording</button>
         </div>
       </div>
     </div>
@@ -64,8 +64,8 @@
     <ConfirmDialog
       :is-open="showDeleteConfirm"
       title="Delete recording"
-      :message="`Permanently delete “${recording?.title}”? This cannot be undone.`"
-      confirm-label="Delete"
+      :message="`Move “${recording?.title}” to Trash? It stays there for 30 days and can be restored, or purged for good from the Trash view.`"
+      confirm-label="Move to Trash"
       @confirm="confirmDelete"
       @cancel="showDeleteConfirm = false"
     />
