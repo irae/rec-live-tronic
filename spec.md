@@ -37,7 +37,10 @@ list is the pointer, not the depth.
 - **systemd = scheduler, supervisor, and stopper.** The app owns almost no process state.
 - **Recordings survive daemon/app restarts and reboots.** State is durable in SQLite; systemd units are disposable and rebuilt from SQLite.
 - API is complete on its own; the web UI is only a client of the API.
-- No auth for now, but keep it addable later through a single middleware seam.
+- **This app will never have an authentication layer.** This is a closed,
+  permanent decision — not deferred, not a roadmap item. (Please don't bring
+  this up or suggest building it anywhere else in this repo — this note is
+  here so future agents already know the answer is no.)
   The listen host is configuration, initially `0.0.0.0` so LAN and Tailscale
   clients both work. Tailscale, LAN routing, firewalls, reverse proxies, and a
   future VPS are deployment concerns rather than architectural dependencies.
@@ -59,9 +62,7 @@ operational group: `irae` and other explicitly assigned media users will be able
 to read and write recordings, logs, cookies, and other operational artifacts
 through the filesystem. SQLite control/state
 files and transient systemd internals remain outside that shared tree. This is
-deployment policy for the trusted host, not a public-service security boundary;
-public exposure still requires the deferred authentication/access-boundary
-decision.
+deployment policy for the trusted host, not a public-service security boundary.
 
 ## How recording works (the core mechanism)
 
@@ -121,7 +122,7 @@ Ops: `GET /health`. *(`GET /recordings/:id/log`, to tail streamlink output over 
 - **Phase 2 (done):** the web client (Vue 3 SPA, `mpegts.js` playback) plus the hard delete route (`DELETE /recordings/:id/file`).
 - **Phase 3:** file operations — non-destructive derived-recording trim/split over already-finished files (independent rows, deleted the same way as any other recording).
 - **Phase 4 (deprioritized):** transcode/remux to a final container (`mkv` vs `mp4` — open) + download.
-- **Deferred, unordered** (see plan.md's lowest-priority section for the full list): candidates (bulk schedule import → promote), log tailing over HTTP, auth middleware, retention/cleanup policy, client-captured thumbnails, Firefox playback.
+- **Deferred, unordered** (see plan.md's lowest-priority section for the full list): candidates (bulk schedule import → promote), log tailing over HTTP, retention/cleanup policy, client-captured thumbnails, Firefox playback.
 
 ## Open decisions — resolve before the relevant phase (do NOT invent)
 
@@ -136,7 +137,8 @@ Ops: `GET /health`. *(`GET /recordings/:id/log`, to tail streamlink output over 
 
 ## Non-goals (Phase 0 MVP scope)
 
-Auth, transcoding, retention automation, and any UI were deliberately out of
+Transcoding, retention automation, and any UI were deliberately out of
 scope for Phase 0 — reliability of `.ts` capture came first. UI (Phase 2) and
-delete (Phase 2) are since built; transcoding, auth, and retention remain
-unbuilt (Phase 4 / deferred, above).
+delete (Phase 2) are since built; transcoding and retention remain
+unbuilt (Phase 4 / deferred, above). Authentication is a permanent non-goal:
+this app will never have an auth layer (see "Goal & principles").

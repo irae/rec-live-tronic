@@ -27,7 +27,6 @@ export interface HealthReport {
 }
 
 export interface AppDependencies {
-  authenticate?: RequestHandler;
   health: () => Promise<HealthReport>;
   recorder?: RecorderService;
   privateApi?: boolean;
@@ -39,8 +38,6 @@ type MulterMiddleware = { single(field: string): RequestHandler };
 type MulterFactory = ((options: { storage: unknown; limits: { fileSize: number; files: number } }) => MulterMiddleware) & { memoryStorage(): unknown };
 const require = createRequire(import.meta.url);
 const multer = require("multer") as MulterFactory;
-
-export const noOpAuthentication: RequestHandler = (_request, _response, next) => next();
 
 function errorHandler(error: unknown, _request: Request, response: Response, _next: NextFunction): void {
   if (error instanceof AppError) {
@@ -57,7 +54,6 @@ function errorHandler(error: unknown, _request: Request, response: Response, _ne
 export function createApp(deps: AppDependencies): express.Express {
   const app = express();
   app.disable("x-powered-by");
-  app.use(deps.authenticate ?? noOpAuthentication);
 
   app.get("/health", async (_request, response, next) => {
     try {

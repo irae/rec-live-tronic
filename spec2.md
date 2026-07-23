@@ -73,8 +73,9 @@ every failure hit during acceptance.
   in-progress capture running; durable SQLite intent + a startup
   re-adoption/reconciliation pass reconnect to it. See "Process restart vs. live
   recordings" for the mechanism.
-- No auth for now, same single-middleware-seam posture and configurable listen
-  host as `spec.md`. Tailscale/LAN/firewall/VPS remain deployment concerns.
+- Same permanent no-auth decision as `spec.md` (never building an
+  authentication layer) and the same configurable listen host.
+  Tailscale/LAN/firewall/VPS remain deployment concerns.
 
 ## Components (three Node processes)
 
@@ -263,8 +264,8 @@ with the "prove the record path first" lesson and must be confirmed:
   `rec-live-tronic-web.sqlite`: history, file/stream serving, and its worker
   sub-processes (FFmpeg remux, thumbnails, disk scans, retention). Independently
   deployable.
-- Later: candidates, auth seam, retention policy — same as `spec.md`, relocated
-  onto the web process where nonessential.
+- Later: candidates, retention policy — same as `spec.md`, relocated onto the
+  web process where nonessential.
 
 ## Open decisions (resolve before this becomes a plan; do NOT invent)
 
@@ -306,8 +307,9 @@ described here.
 
 ## Non-goals
 
-Same as `spec.md`: auth, transcoding automation, retention automation, and UI
-are not part of the essential record path. Additionally, this candidate treats
+Same as `spec.md`: transcoding automation, retention automation, and UI are
+not part of the essential record path. Authentication is a permanent
+non-goal, per `spec.md`. Additionally, this candidate treats
 per-recording init supervision, a user-bus systemd manager, and a live
 API↔recorder transition socket as **explicit non-goals** — the failures they
 caused are the reason for this redesign.
