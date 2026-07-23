@@ -73,6 +73,15 @@ curl http://127.0.0.1:8787/recordings/rec-REPLACE_ME
 
 Full API reference and response shapes are documented in `README.md` under "Phase 0 curl API".
 
+## Logs on the live host (`irae-sheeta`)
+
+Two distinct log sources exist on the deployed host, with different access:
+
+- **Per-recording streamlink capture logs — viewable, no root needed.** `<recordingsDir>/<id>.log` (e.g. `/srv/rec-live-tronic/recordings/<id>.log`) holds the recorder subprocess's `stderr`, appended directly to a file next to the `.ts` (commit `1385458`, "stderr to shared log"). This directory is `rec-media`-group readable/writable, so `irae` (a `rec-media` member) can read these directly over SSH — no `su`/`sudo` needed. Also fetchable via `GET /recordings/:id/log`.
+- **API/reconciler service's own `stdout`/`stderr` — NOT viewable by `irae` as deployed.** Neither systemd unit (`rec-live-tronic-api.service`, `rec-live-tronic-reconciler.service`) overrides `StandardOutput`/`StandardError`, so both default to the systemd journal only — not a file under the `rec-media`-readable tree. Reading them requires either `adm`/`systemd-journal` group membership (`irae` doesn't have this by default — verified directly: `journalctl -u rec-live-tronic-api.service` as `irae` returns `-- No entries --` with an explicit "users in groups adm, systemd-journal can see all messages" notice) or root (`sudo journalctl -u <unit>`). This matters for any application-level `console.error`/`console.log` in `src/` — e.g. `RecorderService.deleteRecording`'s unlink-failure logging — none of that reaches an `irae`-readable file as currently configured.
+
+If future debugging needs the API/reconciler's own logs readable without root, the fix is adding `irae` to `adm` or `systemd-journal` on the host (`usermod -aG systemd-journal irae`, requires root), or adding an explicit `StandardOutput=append:...`/`StandardError=append:...` to those units pointing at a `rec-media`-readable path (mirroring the streamlink pattern above) — neither has been done as of this writing.
+
 ## Client Artifacts
 
 The web client is served by the Express API at `/` after the `npm run build` step completes. Vite produces:
