@@ -2,7 +2,7 @@
   <div id="app" class="app">
     <header class="mast">
       <span class="brand">
-        Tronic<span class="dot"></span>
+        <span class="brand-accent">Rec</span>Tronic<span class="dot"></span>
         <small>rec · {{ route.name === 'archive' ? 'archive' : route.name === 'schedule' ? 'schedule' : 'set' }}</small>
       </span>
       <nav class="nav">
@@ -16,7 +16,7 @@
     </main>
 
     <footer class="foot">
-      <span>Tronic <span class="dot">●</span> personal stream recorder</span>
+      <span>RecTronic <span class="dot">●</span> personal stream recorder</span>
       <span id="footer-stats">recorded · scheduled</span>
     </footer>
   </div>
@@ -93,6 +93,8 @@ a { color: inherit; text-decoration: none; }
   display: inline-flex; align-items: baseline; gap: 9px;
   line-height: 1;
 }
+
+.brand-accent { color: var(--fluoro); }
 
 .brand .dot {
   width: 12px; height: 12px; border-radius: 50%;

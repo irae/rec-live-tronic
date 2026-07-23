@@ -10,25 +10,25 @@ const router = createRouter({
       path: "/",
       name: "archive",
       component: ArchiveView,
-      meta: { title: "Tronic · Archive" },
+      meta: { title: "Archive - RecTronic" },
     },
     {
       path: "/schedule",
       name: "schedule",
       component: ScheduleView,
-      meta: { title: "Tronic · Schedule" },
+      meta: { title: "Schedule - RecTronic" },
     },
     {
       path: "/watch/:id",
       name: "detail",
       component: RecordingDetail,
-      meta: { title: "Tronic" },
+      meta: { title: "RecTronic" },
     },
   ],
 });
 
 router.afterEach((to) => {
-  const title = typeof to.meta.title === "string" ? to.meta.title : "Tronic";
+  const title = typeof to.meta.title === "string" ? to.meta.title : "RecTronic";
   document.title = title;
 });
 

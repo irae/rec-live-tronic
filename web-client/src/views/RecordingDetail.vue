@@ -64,7 +64,7 @@
     <ConfirmDialog
       :is-open="showDeleteConfirm"
       title="Delete recording"
-      message="Permanently delete this recording? This cannot be undone."
+      :message="`Permanently delete “${recording?.title}”? This cannot be undone.`"
       confirm-label="Delete"
       @confirm="confirmDelete"
       @cancel="showDeleteConfirm = false"
@@ -169,7 +169,7 @@ watch(
     if (typeof id !== "string") return;
     try {
       recording.value = await api.getRecording(id);
-      document.title = `Tronic · ${recording.value.title}`;
+      document.title = `${recording.value.title} - RecTronic`;
       if (recording.value.status === "recorded") {
         await nextTick();
         setupPlayer();
