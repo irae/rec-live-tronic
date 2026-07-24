@@ -35,6 +35,14 @@ t.before(async () => {
   const ffmpeg = join(root, "ffmpeg");
   await writeFile(ffmpeg, ffmpegStubScript, { mode: 0o755 });
   await chmod(ffmpeg, 0o755);
+  // Fixtures are plain-text stand-ins, not real MPEG-TS, so a real ffprobe
+  // would fail to parse them anyway -- this stub just fails fast and
+  // deterministically, exercising extractSegment's graceful fallback to the
+  // un-snapped segment (see cut-extract.ts) instead of depending on a real
+  // ffprobe's specific error behavior on garbage input.
+  const ffprobe = join(root, "ffprobe");
+  await writeFile(ffprobe, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  await chmod(ffprobe, 0o755);
   // UserSystemdClient spawns "systemctl"/"systemd-run" by bare name (resolved
   // via PATH, not a config-provided path like streamlink/ffmpeg above), so a
   // dev machine or CI runner with no real systemd (e.g. macOS) would hit
@@ -55,6 +63,7 @@ t.before(async () => {
     REC_LIVE_PRIVATE_SOCKET: join(root, "run", "api.sock"),
     REC_LIVE_STREAMLINK_BIN: streamlink,
     REC_LIVE_FFMPEG_BIN: ffmpeg,
+    REC_LIVE_FFPROBE_BIN: ffprobe,
     REC_LIVE_OEMBED_ENDPOINT: "http://127.0.0.1:1/oembed",
   });
   running = await startServer(config, "24.0.0");
@@ -1891,6 +1900,9 @@ t.test("sweepStaleCutDrafts removes previewing drafts (and folders) older than t
   const ffmpeg = join(sweepRoot, "ffmpeg");
   await writeFile(ffmpeg, ffmpegStubScript, { mode: 0o755 });
   await chmod(ffmpeg, 0o755);
+  const ffprobe = join(sweepRoot, "ffprobe");
+  await writeFile(ffprobe, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  await chmod(ffprobe, 0o755);
   const sweepConfig = loadConfig({
     REC_LIVE_HOST: "127.0.0.1",
     REC_LIVE_PORT: "0",
@@ -1899,6 +1911,7 @@ t.test("sweepStaleCutDrafts removes previewing drafts (and folders) older than t
     REC_LIVE_PRIVATE_SOCKET: join(sweepRoot, "run", "api.sock"),
     REC_LIVE_STREAMLINK_BIN: streamlink,
     REC_LIVE_FFMPEG_BIN: ffmpeg,
+    REC_LIVE_FFPROBE_BIN: ffprobe,
     REC_LIVE_OEMBED_ENDPOINT: "http://127.0.0.1:1/oembed",
   });
   let sweepServer = await startServer(sweepConfig, "24.0.0");

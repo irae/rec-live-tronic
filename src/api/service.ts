@@ -231,7 +231,7 @@ export class RecorderService {
         const segment = parsed.segments[index]!;
         const tmpPath = join(workingDir, `piece-${index}.ts.tmp`);
         tmpPaths.push(tmpPath);
-        await extractSegment(this.config.ffmpegBin, source.tsPath, segment, tmpPath);
+        await extractSegment(this.config.ffmpegBin, source.tsPath, segment, tmpPath, this.config.ffprobeBin);
       }
     } catch (error) {
       await Promise.all(tmpPaths.map((tmpPath) => rm(tmpPath, { force: true }).catch(() => undefined)));
