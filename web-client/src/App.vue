@@ -25,12 +25,15 @@
       <span>RecTronic <span class="dot">●</span> personal stream recorder</span>
       <span id="footer-stats">recorded · scheduled</span>
     </footer>
+
+    <ToastHost />
   </div>
 </template>
 
 <script setup lang="ts">
 import { useRoute } from "vue-router";
 import { diskSpace } from "./api";
+import ToastHost from "./components/ToastHost.vue";
 
 const route = useRoute();
 

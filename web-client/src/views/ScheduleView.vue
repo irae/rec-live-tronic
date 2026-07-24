@@ -207,6 +207,9 @@
 <script setup lang="ts">
 import { ref, reactive, watch, onMounted, onUnmounted, computed } from "vue";
 import { api } from "../api";
+import { useToast } from "../composables/useToast";
+
+const { toast } = useToast();
 
 interface Recording {
   id: string;
@@ -388,6 +391,7 @@ async function handleAddRecording(): Promise<void> {
 
     recordings.value.unshift(newRecording as unknown as Recording);
     resetForm();
+    toast("Recording scheduled");
   } catch (err) {
     console.error("Failed to create recording:", err);
     error.value =
@@ -420,6 +424,7 @@ async function handleAddRecordingNow(): Promise<void> {
 
     recordings.value.unshift(newRecording as unknown as Recording);
     resetForm();
+    toast("Recording started");
   } catch (err) {
     console.error("Failed to create recording:", err);
     error.value =
@@ -479,6 +484,7 @@ async function handleCancel(id: string): Promise<void> {
     error.value = null;
     await api.cancelRecording(id);
     recordings.value = recordings.value.filter((rec) => rec.id !== id);
+    toast("Recording cancelled");
   } catch (err) {
     console.error("Failed to cancel recording:", err);
     error.value =
@@ -496,6 +502,7 @@ async function handleStartNow(id: string): Promise<void> {
     if (idx >= 0) {
       recordings.value[idx] = result.recording as unknown as Recording;
     }
+    toast("Recording started");
   } catch (err) {
     console.error("Failed to start recording:", err);
     error.value =
@@ -514,6 +521,7 @@ async function handleStopEarly(id: string): Promise<void> {
     if (idx >= 0) {
       recordings.value[idx] = result.recording as unknown as Recording;
     }
+    toast("Recording stopped");
   } catch (err) {
     console.error("Failed to stop recording:", err);
     error.value =
@@ -546,6 +554,7 @@ async function saveExtend(id: string): Promise<void> {
       recordings.value[idx] = result.recording as unknown as Recording;
     }
     extendingId.value = null;
+    toast("Recording extended");
   } catch (err) {
     console.error("Failed to extend recording:", err);
     error.value =
@@ -596,6 +605,7 @@ async function saveEdit(id: string): Promise<void> {
     }
 
     editingId.value = null;
+    toast("Recording updated");
   } catch (err) {
     console.error("Failed to update recording:", err);
     error.value =
