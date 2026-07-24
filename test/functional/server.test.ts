@@ -1185,18 +1185,24 @@ t.test("edits title and stage on a finished recording via PATCH", async (t) => {
   t.equal(fetched.recording.status, "recorded");
 });
 
-t.test("rejects editing start/stop/quality on a finished recording", async (t) => {
+t.test("allows editing start/stop but rejects quality on a finished recording", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");
   if (!address || typeof address === "string") return;
   const base = `http://127.0.0.1:${address.port}`;
-  const id = await seedRecordedRecording(base, "immutable-window recording");
-  for (const patch of [{ start_at: "2099-01-01T00:30:00Z" }, { stop_at: "2099-01-01T02:00:00Z" }, { quality: "480p" }]) {
-    const response = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
-    t.equal(response.status, 409);
-    const body = await response.json() as { error: { code: string } };
-    t.equal(body.error.code, "STATUS_CONFLICT");
-  }
+  const id = await seedRecordedRecording(base, "editable-window recording");
+  const startResponse = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ start_at: "2099-01-01T00:30:00Z" }) });
+  t.equal(startResponse.status, 200);
+  const stopResponse = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ stop_at: "2099-01-01T02:00:00Z" }) });
+  t.equal(stopResponse.status, 200);
+  const fetched = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { startAt: string; stopAt: string } };
+  t.equal(fetched.recording.startAt, "2099-01-01T00:30:00.000Z");
+  t.equal(fetched.recording.stopAt, "2099-01-01T02:00:00.000Z");
+
+  const qualityResponse = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ quality: "480p" }) });
+  t.equal(qualityResponse.status, 409);
+  const body = await qualityResponse.json() as { error: { code: string } };
+  t.equal(body.error.code, "STATUS_CONFLICT");
 });
 
 t.test("clears stage when PATCHed with an empty stage on a finished recording", async (t) => {
@@ -1249,18 +1255,20 @@ t.test("leaves the title unchanged when editing metadata fields on a finished re
   t.equal(fetched.recording.title, "title should stay put");
 });
 
-t.test("still rejects editing start/stop/quality on a finished recording", async (t) => {
+t.test("still allows editing start/stop but rejects quality on a finished recording", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");
   if (!address || typeof address === "string") return;
   const base = `http://127.0.0.1:${address.port}`;
-  const id = await seedRecordedRecording(base, "immutable-window metadata recording");
-  for (const patch of [{ start_at: "2099-01-01T00:30:00Z" }, { stop_at: "2099-01-01T02:00:00Z" }, { quality: "480p" }]) {
+  const id = await seedRecordedRecording(base, "editable-window metadata recording");
+  for (const patch of [{ start_at: "2099-01-01T00:30:00Z" }, { stop_at: "2099-01-01T02:00:00Z" }]) {
     const response = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
-    t.equal(response.status, 409);
-    const body = await response.json() as { error: { code: string } };
-    t.equal(body.error.code, "STATUS_CONFLICT");
+    t.equal(response.status, 200);
   }
+  const qualityResponse = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ quality: "480p" }) });
+  t.equal(qualityResponse.status, 409);
+  const body = await qualityResponse.json() as { error: { code: string } };
+  t.equal(body.error.code, "STATUS_CONFLICT");
 });
 
 t.test("reports is_recording true only while a recording is active", async (t) => {
@@ -1550,7 +1558,7 @@ t.test("keep promotes selected pieces to recorded recordings with cut_from_id se
   t.equal(existsSync(join(root, "recordings", id)), false);
 });
 
-t.test("keep computes derived start_at/stop_at from the source wall-clock window", async (t) => {
+t.test("keep defaults derived start_at/stop_at to the source's own dates, editable per piece", async (t) => {
   const address = running.publicServer.address();
   if (!address || typeof address === "string") return t.fail("no public listener");
   const base = `http://127.0.0.1:${address.port}`;
@@ -1562,8 +1570,21 @@ t.test("keep computes derived start_at/stop_at from the source wall-clock window
     body: JSON.stringify({}),
   });
   const body = await response.json() as { recordings: { startAt: string; stopAt: string }[] };
-  t.equal(body.recordings[0]!.startAt, "2099-01-01T00:05:00.000Z");
-  t.equal(body.recordings[0]!.stopAt, "2099-01-01T00:10:00.000Z");
+  // A cut is conceptually "the same event" as its source, so it defaults to
+  // the source's own dates verbatim -- not an offset-computed sub-window.
+  t.equal(body.recordings[0]!.startAt, "2099-01-01T00:00:00.000Z");
+  t.equal(body.recordings[0]!.stopAt, "2099-01-01T01:00:00.000Z");
+
+  const editId2 = await createFinishedRecording(base, "keep wall-clock override source");
+  const draft2 = await createTrimDraft(base, editId2, "5:00", "10:00");
+  const editedResponse = await fetch(`${base}/recordings/${editId2}/cut/${draft2.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ overrides: { "0": { start_at: "2099-01-02T00:00:00Z", stop_at: "2099-01-02T01:00:00Z" } } }),
+  });
+  const editedBody = await editedResponse.json() as { recordings: { startAt: string; stopAt: string }[] };
+  t.equal(editedBody.recordings[0]!.startAt, "2099-01-02T00:00:00.000Z");
+  t.equal(editedBody.recordings[0]!.stopAt, "2099-01-02T01:00:00.000Z");
 });
 
 t.test("keep on a trim defaults to keeping the single piece; split keeps only checked indices", async (t) => {

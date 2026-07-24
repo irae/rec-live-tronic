@@ -317,10 +317,10 @@ export class RecorderService {
       if (keepIndices.length === 0) throw new AppError("VALIDATION_ERROR", 400, "keep must include at least one piece index");
     }
 
-    let overrides: Record<string, { title?: unknown; artist?: unknown; venue?: unknown; event?: unknown; stage?: unknown }> = {};
+    let overrides: Record<string, { title?: unknown; artist?: unknown; venue?: unknown; event?: unknown; stage?: unknown; start_at?: unknown; stop_at?: unknown }> = {};
     if (body.overrides !== undefined) {
       if (typeof body.overrides !== "object" || body.overrides === null || Array.isArray(body.overrides)) throw new AppError("VALIDATION_ERROR", 400, "overrides must be an object keyed by piece index");
-      overrides = body.overrides as Record<string, { title?: unknown; artist?: unknown; venue?: unknown; event?: unknown; stage?: unknown }>;
+      overrides = body.overrides as Record<string, { title?: unknown; artist?: unknown; venue?: unknown; event?: unknown; stage?: unknown; start_at?: unknown; stop_at?: unknown }>;
       for (const key of Object.keys(overrides)) {
         const index = Number(key);
         if (!Number.isInteger(index) || index < 0 || index >= parsed.segments.length) throw new AppError("VALIDATION_ERROR", 400, "overrides contains an invalid piece index");
@@ -338,13 +338,10 @@ export class RecorderService {
       return text(value, field, limit);
     };
 
-    const sourceStartMs = toUnixMilliseconds(source.startAt, "startAt");
-
     // First pass: validate everything and compute every value that could
     // throw (field overrides, RFC3339 conversion) before any file is
     // touched, so a 400 here has zero side effects on disk.
     const toPromote = keepIndices.map((index) => {
-      const segment = parsed.segments[index]!;
       const override = overrides[String(index)];
       if (override !== undefined && (typeof override !== "object" || override === null || Array.isArray(override))) {
         throw new AppError("VALIDATION_ERROR", 400, `overrides[${index}] must be an object`);
@@ -355,8 +352,14 @@ export class RecorderService {
       const venue = overrideField(override?.venue, `overrides[${index}].venue`) ?? source.venue;
       const event = overrideField(override?.event, `overrides[${index}].event`) ?? source.event;
       const stage = overrideField(override?.stage, `overrides[${index}].stage`) ?? source.stage;
-      const startAt = toRfc3339(Math.round(sourceStartMs + segment.start * 1000));
-      const stopAt = toRfc3339(Math.round(sourceStartMs + segment.end * 1000));
+      // Cut pieces default to the same dates as the source recording (a cut
+      // is conceptually "the same event," not a different sub-window) --
+      // editable per piece since a split can plausibly want distinct dates.
+      const startAt = override?.start_at !== undefined ? instant(override.start_at, `overrides[${index}].start_at`) : source.startAt;
+      const stopAt = override?.stop_at !== undefined ? instant(override.stop_at, `overrides[${index}].stop_at`) : source.stopAt;
+      if (toUnixMilliseconds(startAt, `overrides[${index}].start_at`) >= toUnixMilliseconds(stopAt, `overrides[${index}].stop_at`)) {
+        throw new AppError("VALIDATION_ERROR", 400, `overrides[${index}].start_at must be before stop_at`);
+      }
       return { index, newId: recordingId(), title, artist, venue, event, stage, startAt, stopAt };
     });
 
@@ -429,7 +432,7 @@ export class RecorderService {
     } else if (existing.status === "recording") {
       if (patch.title !== undefined || patch.stage !== undefined || patch.artist !== undefined || patch.venue !== undefined || patch.event !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined) throw new AppError("STATUS_CONFLICT", 409, "Running recordings may only change stop_at");
     } else if (existing.status === "recorded") {
-      if (patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt !== undefined) throw new AppError("STATUS_CONFLICT", 409, "Finished recordings may only change title, stage, artist, venue, or event");
+      if (patch.quality !== undefined) throw new AppError("STATUS_CONFLICT", 409, "Finished recordings may only change title, stage, artist, venue, event, start_at, or stop_at");
     } else throw new AppError("STATUS_CONFLICT", 409, "Recording cannot be changed in its current status");
     const effectiveStart = patch.startAt ?? existing.startAt;
     const effectiveStop = patch.stopAt ?? existing.stopAt;

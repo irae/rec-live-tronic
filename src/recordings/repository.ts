@@ -244,7 +244,7 @@ export class RecordingRepository {
       if (existing.status === "recording" && (patch.title !== undefined || patch.stage !== undefined || patch.artist !== undefined || patch.venue !== undefined || patch.event !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined)) {
         return { outcome: "conflict" };
       }
-      if (existing.status === "recorded" && (patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt !== undefined)) {
+      if (existing.status === "recorded" && patch.quality !== undefined) {
         return { outcome: "conflict" };
       }
       if (existing.status !== "scheduled" && existing.status !== "recording" && existing.status !== "recorded") return { outcome: "conflict" };
