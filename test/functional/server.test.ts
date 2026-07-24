@@ -167,6 +167,122 @@ t.test("derives stage from a three-part title and leaves it null otherwise", asy
   t.equal(await schedule("just a freeform title"), null);
 });
 
+t.test("persists artist, venue, and event through create and GET", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=phase03",
+      title: "metadata persistence test",
+      artist: "The Artist",
+      venue: "The Venue",
+      event: "The Event",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  t.equal(created.status, 201);
+  const createdBody = await created.json() as { recording: { id: string; artist: string | null; venue: string | null; event: string | null } };
+  t.equal(createdBody.recording.artist, "The Artist");
+  t.equal(createdBody.recording.venue, "The Venue");
+  t.equal(createdBody.recording.event, "The Event");
+  const fetched = await (await fetch(`${base}/recordings/${createdBody.recording.id}`)).json() as { recording: { artist: string | null; venue: string | null; event: string | null } };
+  t.equal(fetched.recording.artist, "The Artist");
+  t.equal(fetched.recording.venue, "The Venue");
+  t.equal(fetched.recording.event, "The Event");
+});
+
+t.test("composes the title from artist/venue/event/stage when no title is given", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=phase03",
+      artist: "Artist",
+      venue: "Venue",
+      event: "Event",
+      stage: "Stage",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  t.equal(created.status, 201);
+  const createdBody = await created.json() as { recording: { title: string } };
+  t.equal(createdBody.recording.title, "Artist - Venue - Event - Stage");
+});
+
+t.test("omits empty segments (no doubled dashes) when composing a title", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=phase03",
+      artist: "Artist",
+      stage: "Stage",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  t.equal(created.status, 201);
+  const createdBody = await created.json() as { recording: { title: string } };
+  t.equal(createdBody.recording.title, "Artist - Stage");
+});
+
+t.test("uses an explicit title verbatim instead of composing from segments", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=phase03",
+      title: "Explicit Title",
+      artist: "Artist",
+      venue: "Venue",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  t.equal(created.status, 201);
+  const createdBody = await created.json() as { recording: { title: string } };
+  t.equal(createdBody.recording.title, "Explicit Title");
+});
+
+t.test("uses a directly-typed stage field over the oembed-derived stage", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=phase03",
+      title: "Artist - Title Stage - Festival",
+      stage: "Explicit Stage",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  t.equal(created.status, 201);
+  const createdBody = await created.json() as { recording: { stage: string | null } };
+  t.equal(createdBody.recording.stage, "Explicit Stage");
+});
+
 t.test("returns 409 for a recording that is still scheduled", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");
