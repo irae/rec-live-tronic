@@ -109,7 +109,10 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
       const recordings = trashed !== undefined
         ? recorder.listRecordings(undefined, { trashed })
         : recorder.listRecordings(request.query.status);
-      const result: { recordings: unknown; disk?: { actual_bytes: number; projected_bytes: number } } = { recordings };
+      const result: { recordings: unknown; is_recording: boolean; disk?: { actual_bytes: number; projected_bytes: number } } = {
+        recordings,
+        is_recording: recorder.listRecordings("recording").length > 0,
+      };
       if (config) {
         try {
           const stats = await statfs(config.recordingsDir);

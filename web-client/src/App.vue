@@ -6,8 +6,9 @@
         <small>rec · {{ route.name === 'archive' ? 'archive' : route.name === 'schedule' ? 'schedule' : route.name === 'trash' ? 'trash' : 'set' }}</small>
       </span>
       <div v-if="diskSpace" class="disk">
+        <span v-if="isRecording" class="rec-indicator" role="status" aria-label="Recording in progress" title="Recording in progress"></span>
         <span class="disk__item"><b>{{ formatBytes(diskSpace.actualBytes) }}</b> free</span>
-        <span class="disk__item disk__item--soft"><b>{{ formatBytes(diskSpace.projectedBytes) }}</b> after captures</span>
+        <span v-if="isRecording" class="disk__item disk__item--soft"><b>{{ formatBytes(diskSpace.projectedBytes) }}</b> after captures</span>
       </div>
 
       <nav class="nav">
@@ -29,8 +30,9 @@
 </template>
 
 <script setup lang="ts">
+import { onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
-import { diskSpace } from "./api";
+import { api, diskSpace, isRecording } from "./api";
 
 const route = useRoute();
 
@@ -40,6 +42,22 @@ function formatBytes(bytes: number): string {
   const mb = bytes / 1_048_576;
   return `${mb.toFixed(0)} MB`;
 }
+
+// Global poll so the header's recording indicator and disk figures stay
+// current on every page, including ones (Archive, RecordingDetail) that do
+// not otherwise poll /recordings themselves.
+let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+onMounted(() => {
+  api.listRecordings("recording").catch(() => {});
+  pollTimer = setInterval(() => {
+    api.listRecordings("recording").catch(() => {});
+  }, 60_000);
+});
+
+onUnmounted(() => {
+  if (pollTimer) clearInterval(pollTimer);
+});
 </script>
 
 <style>
@@ -117,6 +135,15 @@ a { color: inherit; text-decoration: none; }
 .disk__item b { color: var(--ink); font-weight: 700; }
 
 .disk__item--soft { color: var(--ink-soft); opacity: .8; }
+
+.rec-indicator {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--fluoro);
+  display: inline-block;
+  animation: rec-blink 1.6s ease-in-out infinite;
+}
+
+@keyframes rec-blink { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
 
 @media (min-width: 700px) {
   .disk {

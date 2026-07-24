@@ -1050,3 +1050,65 @@ t.test("clears stage when PATCHed with an empty stage on a finished recording", 
   const after = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { stage: string | null } };
   t.equal(after.recording.stage, null);
 });
+
+t.test("reports is_recording true only while a recording is active", async (t) => {
+  // Runs against its own isolated server (rather than the shared `running`
+  // instance) because earlier tests in this suite leave lingering rows in
+  // "recording" status on the shared server, which would make a "no
+  // recording active" baseline unreliable.
+  const flagRoot = await mkdtemp(join(tmpdir(), "rec-live-tronic-flag-"));
+  const streamlink = join(flagRoot, "streamlink");
+  await writeFile(streamlink, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(streamlink, 0o755);
+  const flagConfig = loadConfig({
+    REC_LIVE_HOST: "127.0.0.1",
+    REC_LIVE_PORT: "0",
+    REC_LIVE_DATA_DIR: join(flagRoot, "state"),
+    REC_LIVE_RECORDINGS_DIR: join(flagRoot, "recordings"),
+    REC_LIVE_PRIVATE_SOCKET: join(flagRoot, "run", "api.sock"),
+    REC_LIVE_STREAMLINK_BIN: streamlink,
+    REC_LIVE_OEMBED_ENDPOINT: "http://127.0.0.1:1/oembed",
+  });
+  const flagServer = await startServer(flagConfig, "24.0.0");
+  try {
+    const address = flagServer.publicServer.address();
+    t.ok(address && typeof address !== "string");
+    if (!address || typeof address === "string") return;
+    const base = `http://127.0.0.1:${address.port}`;
+    const before = await (await fetch(`${base}/recordings`)).json() as { is_recording: boolean };
+    t.equal(before.is_recording, false);
+    const created = await fetch(`${base}/recordings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        url: "https://www.youtube.com/watch?v=phase4bc",
+        title: "is_recording flag test",
+        start_at: "2099-01-01T00:00:00Z",
+        stop_at: "2099-01-01T01:00:00Z",
+      }),
+    });
+    const createdBody = await created.json() as { recording: { id: string; version: number } };
+    const id = createdBody.recording.id;
+    const transitionPath = `/internal/recordings/${id}/transition`;
+    await privateRequest(join(flagRoot, "run", "api.sock"), transitionPath, {
+      expected_status: "scheduled",
+      expected_version: createdBody.recording.version,
+      status: "recording",
+    });
+    const during = await (await fetch(`${base}/recordings`)).json() as { is_recording: boolean };
+    t.equal(during.is_recording, true);
+    const recording = await fetch(`${base}/recordings/${id}`);
+    const recordingBody = await recording.json() as { recording: { version: number } };
+    await writeFile(join(flagRoot, "recordings", `${id}.ts`), "content");
+    await privateRequest(join(flagRoot, "run", "api.sock"), transitionPath, {
+      expected_status: "recording",
+      expected_version: recordingBody.recording.version,
+      status: "recorded",
+    });
+    const after = await (await fetch(`${base}/recordings`)).json() as { is_recording: boolean };
+    t.equal(after.is_recording, false);
+  } finally {
+    await flagServer.close();
+    await rm(flagRoot, { recursive: true, force: true });
+  }
+});
