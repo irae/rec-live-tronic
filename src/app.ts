@@ -131,6 +131,14 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
       response.json(metadata);
     } catch (error) { next(error); }
   });
+  app.get("/recordings/formats", async (request, response, next) => {
+    try {
+      const url = request.query.url;
+      if (typeof url !== "string") throw new AppError("VALIDATION_ERROR", 400, "url is required");
+      const formats = await recorder.getAvailableFormats(url);
+      response.json(formats);
+    } catch (error) { next(error); }
+  });
   app.get("/recordings/:id", (request, response, next) => {
     try { response.json({ recording: recorder.getRecording(request.params.id) }); } catch (error) { next(error); }
   });

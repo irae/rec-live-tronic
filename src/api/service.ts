@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { execFile } from "node:child_process";
 import { stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { CookieRepository, type CookieMetadata } from "../cookies/repository.js";
@@ -54,6 +55,51 @@ async function fetchOembedMetadata(endpoint: string, url: string): Promise<{ aut
   } catch {
     return { authorName: null, title: null };
   }
+}
+
+interface AvailableFormats {
+  available: boolean;
+  qualities: string[];
+  best_matches: string | null;
+}
+
+const unavailableFormats: AvailableFormats = { available: false, qualities: [], best_matches: null };
+
+// One-shot `streamlink --json <url>` probe to discover which named qualities a
+// LIVE stream currently exposes. This never throws: any failure (non-live
+// video, streamlink error, timeout, malformed JSON, missing binary) resolves
+// to `unavailableFormats` so the formats route never blocks the recording form.
+async function probeAvailableFormats(streamlinkBin: string, url: string): Promise<AvailableFormats> {
+  let stdout: string;
+  try {
+    stdout = await new Promise<string>((resolve, reject) => {
+      execFile(streamlinkBin, ["--json", url], { timeout: 8_000 }, (error, out) => {
+        if (error) { reject(error); return; }
+        resolve(out);
+      });
+    });
+  } catch {
+    return unavailableFormats;
+  }
+
+  let parsed: unknown;
+  try { parsed = JSON.parse(stdout); } catch { return unavailableFormats; }
+  if (typeof parsed !== "object" || parsed === null) return unavailableFormats;
+  const streams = (parsed as { streams?: unknown }).streams;
+  if (typeof streams !== "object" || streams === null) return unavailableFormats;
+
+  const streamEntries = streams as Record<string, { url?: unknown } | undefined>;
+  const namedQualityPattern = /^(\d+)p$/;
+  const qualities = Object.keys(streamEntries)
+    .filter((key) => namedQualityPattern.test(key))
+    .sort((a, b) => Number(b.match(namedQualityPattern)?.[1]) - Number(a.match(namedQualityPattern)?.[1]));
+
+  const bestUrl = streamEntries.best?.url;
+  const bestMatches = typeof bestUrl === "string"
+    ? qualities.find((key) => streamEntries[key]?.url === bestUrl) ?? null
+    : null;
+
+  return { available: true, qualities, best_matches: bestMatches };
 }
 
 function validateUrl(value: unknown): string {
@@ -192,6 +238,11 @@ export class RecorderService {
     validateUrl(url);
     const oembed = await fetchOembedMetadata(this.config.oembedEndpoint, url);
     return { author_name: oembed.authorName, title: oembed.title };
+  }
+
+  async getAvailableFormats(url: string): Promise<AvailableFormats> {
+    validateUrl(url);
+    return probeAvailableFormats(this.config.streamlinkBin, url);
   }
 
   listCookies(): CookieMetadata[] { return this.cookies.list(); }

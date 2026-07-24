@@ -763,6 +763,96 @@ t.test("rejects an oembed prefill lookup for a non-youtube url", async (t) => {
   t.equal(body.error.code, "VALIDATION_ERROR");
 });
 
+async function startWithStreamlinkStub(prefix: string, script: string): Promise<{ server: RunningServer; root: string }> {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  const streamlink = join(root, "streamlink");
+  await writeFile(streamlink, script, { mode: 0o755 });
+  await chmod(streamlink, 0o755);
+  const stubConfig = loadConfig({
+    REC_LIVE_HOST: "127.0.0.1",
+    REC_LIVE_PORT: "0",
+    REC_LIVE_DATA_DIR: join(root, "state"),
+    REC_LIVE_RECORDINGS_DIR: join(root, "recordings"),
+    REC_LIVE_PRIVATE_SOCKET: join(root, "run", "api.sock"),
+    REC_LIVE_STREAMLINK_BIN: streamlink,
+  });
+  const server = await startServer(stubConfig, "24.0.0");
+  return { server, root };
+}
+
+t.test("returns available quality formats for a url streamlink can probe", async (t) => {
+  const streamsJson = JSON.stringify({
+    streams: {
+      worst: { type: "hls", url: "https://example.invalid/144p.m3u8" },
+      "144p": { type: "hls", url: "https://example.invalid/144p.m3u8" },
+      "360p": { type: "hls", url: "https://example.invalid/360p.m3u8" },
+      "720p": { type: "hls", url: "https://example.invalid/720p.m3u8" },
+      "1080p": { type: "hls", url: "https://example.invalid/1080p.m3u8" },
+      best: { type: "hls", url: "https://example.invalid/1080p.m3u8" },
+    },
+  });
+  const { server, root } = await startWithStreamlinkStub(
+    "rec-live-tronic-formats-",
+    `#!/bin/sh\nif [ "$1" = "--json" ]; then echo '${streamsJson}'; else exit 0; fi\n`,
+  );
+
+  try {
+    const address = server.publicServer.address();
+    t.ok(address && typeof address !== "string");
+    if (!address || typeof address === "string") return;
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const response = await fetch(`${base}/recordings/formats?url=https://www.youtube.com/watch?v=live-test`);
+
+    t.equal(response.status, 200);
+    const body = await response.json() as { available: boolean; qualities: string[]; best_matches: string | null };
+    t.equal(body.available, true);
+    t.same(body.qualities, ["1080p", "720p", "360p", "144p"]);
+    t.equal(body.best_matches, "1080p");
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+t.test("returns unavailable instead of erroring when streamlink finds no live stream", async (t) => {
+  const { server, root } = await startWithStreamlinkStub(
+    "rec-live-tronic-formats-unavailable-",
+    `#!/bin/sh\nif [ "$1" = "--json" ]; then echo '{"error": "No playable streams found on this URL"}'; else exit 0; fi\n`,
+  );
+
+  try {
+    const address = server.publicServer.address();
+    t.ok(address && typeof address !== "string");
+    if (!address || typeof address === "string") return;
+    const base = `http://127.0.0.1:${address.port}`;
+
+    const response = await fetch(`${base}/recordings/formats?url=https://www.youtube.com/watch?v=not-live`);
+
+    t.equal(response.status, 200, "should return 200 even when streamlink finds no stream");
+    const body = await response.json() as { available: boolean; qualities: string[]; best_matches: string | null };
+    t.equal(body.available, false);
+    t.same(body.qualities, []);
+    t.equal(body.best_matches, null);
+  } finally {
+    await server.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+t.test("rejects a formats lookup for a non-youtube url", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+
+  const response = await fetch(`${base}/recordings/formats?url=https://example.com/video`);
+
+  t.equal(response.status, 400, "should reject non-YouTube URLs");
+  const body = await response.json() as { error: { code: string } };
+  t.equal(body.error.code, "VALIDATION_ERROR");
+});
+
 t.test("serves a finished recording file as an attachment when download=1", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");
