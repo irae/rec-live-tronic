@@ -53,7 +53,7 @@ function sanitizeFilename(title: string): string {
   return sanitized ? `${sanitized}.ts` : "";
 }
 
-function errorHandler(error: unknown, _request: Request, response: Response, _next: NextFunction): void {
+function errorHandler(error: unknown, request: Request, response: Response, _next: NextFunction): void {
   if (error instanceof AppError) {
     response.status(error.status).json({ error: { code: error.code, message: error.message } });
     return;
@@ -62,6 +62,7 @@ function errorHandler(error: unknown, _request: Request, response: Response, _ne
     response.status(400).json({ error: { code: "VALIDATION_ERROR", message: "Request body must be valid JSON" } });
     return;
   }
+  console.error(`Unhandled error on ${request.method} ${request.path}:`, error);
   response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Internal server error" } });
 }
 
