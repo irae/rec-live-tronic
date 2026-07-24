@@ -1477,3 +1477,275 @@ t.test("range-serves a preview piece for playback", async (t) => {
   const missingDraft = await fetch(`${base}/recordings/${id}/cut/cut-nonexistent/pieces/0/file`);
   t.equal(missingDraft.status, 404);
 });
+
+async function createTrimDraft(base: string, id: string, start: string, end?: string): Promise<{ id: string; mode: string; pieces: { index: number; start: string; end: string; file_url: string }[] }> {
+  const response = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(end === undefined ? { mode: "trim", start } : { mode: "trim", start, end }),
+  });
+  const body = await response.json() as { draft: { id: string; mode: string; pieces: { index: number; start: string; end: string; file_url: string }[] } };
+  return body.draft;
+}
+
+async function createSplitDraft(base: string, id: string, cuts: string[]): Promise<{ id: string; mode: string; pieces: { index: number; start: string; end: string; file_url: string }[] }> {
+  const response = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "split", cuts }),
+  });
+  const body = await response.json() as { draft: { id: string; mode: string; pieces: { index: number; start: string; end: string; file_url: string }[] } };
+  return body.draft;
+}
+
+t.test("keep promotes selected pieces to recorded recordings with cut_from_id set", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "keep trim source");
+  const draft = await createTrimDraft(base, id, "5:00", "10:00");
+  const response = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  t.equal(response.status, 200);
+  const body = await response.json() as { recordings: { id: string; status: string; cutFromId: string; url: string; quality: string; stage: string | null; title: string }[] };
+  t.equal(body.recordings.length, 1);
+  const derived = body.recordings[0]!;
+  t.equal(derived.status, "recorded");
+  t.equal(derived.cutFromId, id);
+  t.equal(derived.title, "keep trim source (cut)");
+  const source = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { url: string; quality: string } };
+  t.equal(derived.url, source.recording.url);
+  t.equal(derived.quality, source.recording.quality);
+  const { existsSync } = await import("node:fs");
+  t.equal(existsSync(join(root, "recordings", `${derived.id}.ts`)), true);
+  t.equal(existsSync(join(root, "recordings", id)), false);
+});
+
+t.test("keep computes derived start_at/stop_at from the source wall-clock window", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "keep wall-clock source");
+  const draft = await createTrimDraft(base, id, "5:00", "10:00");
+  const response = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const body = await response.json() as { recordings: { startAt: string; stopAt: string }[] };
+  t.equal(body.recordings[0]!.startAt, "2099-01-01T00:05:00.000Z");
+  t.equal(body.recordings[0]!.stopAt, "2099-01-01T00:10:00.000Z");
+});
+
+t.test("keep on a trim defaults to keeping the single piece; split keeps only checked indices", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+
+  const trimId = await createFinishedRecording(base, "keep trim default source");
+  const trimDraft = await createTrimDraft(base, trimId, "5:00", "10:00");
+  const trimResponse = await fetch(`${base}/recordings/${trimId}/cut/${trimDraft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const trimBody = await trimResponse.json() as { recordings: unknown[] };
+  t.equal(trimBody.recordings.length, 1);
+
+  const splitId = await createFinishedRecording(base, "keep split selected source");
+  const splitDraft = await createSplitDraft(base, splitId, ["20:00", "40:00"]);
+  const splitResponse = await fetch(`${base}/recordings/${splitId}/cut/${splitDraft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ keep: [0, 2], titles: { "0": "Opening set", "2": "Closing set" } }),
+  });
+  t.equal(splitResponse.status, 200);
+  const splitBody = await splitResponse.json() as { recordings: { title: string }[] };
+  t.equal(splitBody.recordings.length, 2);
+  t.same(splitBody.recordings.map((r) => r.title).sort(), ["Closing set", "Opening set"]);
+});
+
+t.test("promoted recordings are listed, served, and re-cuttable like any other recording", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "keep re-cuttable source");
+  const draft = await createTrimDraft(base, id, "5:00", "20:00");
+  const keepResponse = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const keepBody = await keepResponse.json() as { recordings: { id: string }[] };
+  const derivedId = keepBody.recordings[0]!.id;
+
+  const listed = await (await fetch(`${base}/recordings?status=recorded`)).json() as { recordings: { id: string }[] };
+  t.ok(listed.recordings.some((r) => r.id === derivedId));
+
+  const fileResponse = await fetch(`${base}/recordings/${derivedId}/file`);
+  t.equal(fileResponse.status, 200);
+  t.equal(await fileResponse.text(), `source content for ${id}`);
+
+  const recutResponse = await fetch(`${base}/recordings/${derivedId}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "trim", start: "0:01" }),
+  });
+  t.equal(recutResponse.status, 200);
+});
+
+t.test("GET /recordings?cut_from=<id> returns the source's derived recordings", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "cut_from filter source");
+  const other = await createFinishedRecording(base, "cut_from filter unrelated");
+  const draft = await createSplitDraft(base, id, ["20:00", "40:00"]);
+  await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const filtered = await (await fetch(`${base}/recordings?cut_from=${id}`)).json() as { recordings: { id: string; cutFromId: string }[] };
+  t.equal(filtered.recordings.length, 3);
+  t.ok(filtered.recordings.every((r) => r.cutFromId === id));
+  const otherFiltered = await (await fetch(`${base}/recordings?cut_from=${other}`)).json() as { recordings: unknown[] };
+  t.equal(otherFiltered.recordings.length, 0);
+});
+
+t.test("leaves the source row and its .ts untouched after cut and after keep", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "source untouched test");
+  const before = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: unknown };
+  const draft = await createTrimDraft(base, id, "5:00", "10:00");
+  const afterCut = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: unknown };
+  t.same(afterCut.recording, before.recording);
+  await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  const afterKeep = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: unknown };
+  t.same(afterKeep.recording, before.recording);
+  const { readFileSync } = await import("node:fs");
+  t.equal(readFileSync(join(root, "recordings", `${id}.ts`), "utf8"), `source content for ${id}`);
+});
+
+t.test("keep 404s when the draft or source is missing, and 409s when not previewing", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "keep error cases source");
+  const missingSource = await fetch(`${base}/recordings/rec-nonexistent/cut/cut-nonexistent/keep`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  t.equal(missingSource.status, 404);
+  const missingDraft = await fetch(`${base}/recordings/${id}/cut/cut-nonexistent/keep`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  t.equal(missingDraft.status, 404);
+  const draft = await createTrimDraft(base, id, "5:00", "10:00");
+  await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  const secondKeep = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+  t.equal(secondKeep.status, 409);
+});
+
+t.test("abandoning a draft removes its working folder and row", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "abandon draft source");
+  const draft = await createTrimDraft(base, id, "5:00", "10:00");
+  const { existsSync } = await import("node:fs");
+  t.equal(existsSync(join(root, "recordings", id)), true);
+  const response = await fetch(`${base}/recordings/${id}/cut/${draft.id}`, { method: "DELETE" });
+  t.equal(response.status, 204);
+  t.equal(existsSync(join(root, "recordings", id)), false);
+  const pieceAfterAbandon = await fetch(`${base}/recordings/${id}/cut/${draft.id}/pieces/0/file`);
+  t.equal(pieceAfterAbandon.status, 404);
+  const missingDraft = await fetch(`${base}/recordings/${id}/cut/${draft.id}`, { method: "DELETE" });
+  t.equal(missingDraft.status, 404);
+  const missingSource = await fetch(`${base}/recordings/rec-nonexistent/cut/${draft.id}`, { method: "DELETE" });
+  t.equal(missingSource.status, 404);
+});
+
+t.test("sweepStaleCutDrafts removes previewing drafts (and folders) older than the cutoff", async (t) => {
+  const sweepRoot = await mkdtemp(join(tmpdir(), "rec-live-tronic-cut-sweep-"));
+  const streamlink = join(sweepRoot, "streamlink");
+  await writeFile(streamlink, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(streamlink, 0o755);
+  const ffmpeg = join(sweepRoot, "ffmpeg");
+  await writeFile(ffmpeg, ffmpegStubScript, { mode: 0o755 });
+  await chmod(ffmpeg, 0o755);
+  const sweepConfig = loadConfig({
+    REC_LIVE_HOST: "127.0.0.1",
+    REC_LIVE_PORT: "0",
+    REC_LIVE_DATA_DIR: join(sweepRoot, "state"),
+    REC_LIVE_RECORDINGS_DIR: join(sweepRoot, "recordings"),
+    REC_LIVE_PRIVATE_SOCKET: join(sweepRoot, "run", "api.sock"),
+    REC_LIVE_STREAMLINK_BIN: streamlink,
+    REC_LIVE_FFMPEG_BIN: ffmpeg,
+    REC_LIVE_OEMBED_ENDPOINT: "http://127.0.0.1:1/oembed",
+  });
+  let sweepServer = await startServer(sweepConfig, "24.0.0");
+  try {
+    function base(server: RunningServer): string {
+      const address = server.publicServer.address();
+      if (!address || typeof address === "string") throw new Error("No public listener");
+      return `http://127.0.0.1:${address.port}`;
+    }
+
+    async function createFinished(urlSuffix: string): Promise<string> {
+      const created = await fetch(`${base(sweepServer)}/recordings`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          url: `https://www.youtube.com/watch?v=${urlSuffix}`,
+          title: urlSuffix,
+          start_at: "2099-01-01T00:00:00Z",
+          stop_at: "2099-01-01T01:00:00Z",
+        }),
+      });
+      const createdBody = await created.json() as { recording: { id: string; version: number } };
+      const id = createdBody.recording.id;
+      const transitionPath = `/internal/recordings/${id}/transition`;
+      await privateRequest(join(sweepRoot, "run", "api.sock"), transitionPath, { expected_status: "scheduled", expected_version: createdBody.recording.version, status: "recording" });
+      const recording = await fetch(`${base(sweepServer)}/recordings/${id}`);
+      const recordingBody = await recording.json() as { recording: { version: number } };
+      await writeFile(join(sweepRoot, "recordings", `${id}.ts`), `source content for ${id}`);
+      await privateRequest(join(sweepRoot, "run", "api.sock"), transitionPath, { expected_status: "recording", expected_version: recordingBody.recording.version, status: "recorded" });
+      return id;
+    }
+
+    const staleId = await createFinished("cut-sweep-stale");
+    const staleDraftResponse = await fetch(`${base(sweepServer)}/recordings/${staleId}/cut`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "trim", start: "5:00", end: "10:00" }) });
+    const staleDraftBody = await staleDraftResponse.json() as { draft: { id: string } };
+
+    const freshId = await createFinished("cut-sweep-fresh");
+    const freshDraftResponse = await fetch(`${base(sweepServer)}/recordings/${freshId}/cut`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ mode: "trim", start: "5:00", end: "10:00" }) });
+    const freshDraftBody = await freshDraftResponse.json() as { draft: { id: string } };
+
+    const twentyFiveHoursAgo = Date.now() - 25 * 60 * 60 * 1000;
+    const sweepDatabase = openDatabase(sweepConfig.databasePath);
+    try {
+      sweepDatabase.prepare("UPDATE cut_drafts SET updated_at = ? WHERE id = ?").run(twentyFiveHoursAgo, staleDraftBody.draft.id);
+    } finally {
+      sweepDatabase.close();
+    }
+
+    await sweepServer.close();
+    sweepServer = await startServer(sweepConfig, "24.0.0");
+
+    const { existsSync } = await import("node:fs");
+    t.equal(existsSync(join(sweepRoot, "recordings", staleId)), false);
+    t.equal(existsSync(join(sweepRoot, "recordings", freshId)), true);
+    const staleFile = await fetch(`${base(sweepServer)}/recordings/${staleId}/cut/${staleDraftBody.draft.id}/pieces/0/file`);
+    t.equal(staleFile.status, 404);
+    const freshFile = await fetch(`${base(sweepServer)}/recordings/${freshId}/cut/${freshDraftBody.draft.id}/pieces/0/file`);
+    t.equal(freshFile.status, 200);
+  } finally {
+    await sweepServer.close();
+    await rm(sweepRoot, { recursive: true, force: true });
+  }
+});

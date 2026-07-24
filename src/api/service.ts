@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdir, stat, unlink } from "node:fs/promises";
+import { mkdir, rename, rm, stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { CookieRepository, type CookieMetadata } from "../cookies/repository.js";
-import { toUnixMilliseconds } from "../db/instants.js";
+import { toRfc3339, toUnixMilliseconds } from "../db/instants.js";
 import { RecordingRepository, recordingStatuses, type Recording, type RecordingStatus } from "../recordings/repository.js";
 import { CutDraftRepository, type CutDraft } from "../recordings/cut-draft-repository.js";
 import type { Config } from "../config.js";
@@ -182,10 +182,11 @@ export class RecorderService {
     return mapRecording(this.recordings.create({ id, url, title, stage, artist, venue, event, cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
   }
 
-  listRecordings(status?: unknown, filters?: { trashed?: boolean }): ReturnType<typeof mapRecording>[] {
+  listRecordings(status?: unknown, filters?: { trashed?: boolean; cutFromId?: string }): ReturnType<typeof mapRecording>[] {
     return this.recordings.list({
       ...(status !== undefined ? { status: requireStatus(status) } : {}),
       ...(filters?.trashed !== undefined ? { trashed: filters.trashed } : {}),
+      ...(filters?.cutFromId !== undefined ? { cutFromId: filters.cutFromId } : {}),
     }).map(mapRecording);
   }
 
@@ -254,6 +255,95 @@ export class RecorderService {
     const index = Number(indexRaw);
     if (!Number.isInteger(index) || index < 0 || index >= draft.pieceCount) throw new AppError("NOT_FOUND", 404, "Cut piece not found");
     return { filePath: join(draft.workingDir, `piece-${index}.ts`) };
+  }
+
+  // Promotes selected preview pieces of a previewing draft to first-class
+  // `recorded` recordings, linked back to the source via cutFromId. Segments
+  // are re-derived from the draft's stored params (rather than trusting
+  // client input) so the promoted wall-clock windows always match what was
+  // actually extracted. The source row and its .ts are never touched.
+  async keepCutDraft(sourceId: string, draftId: string, input: unknown): Promise<{ recordings: ReturnType<typeof mapRecording>[] }> {
+    const source = this.recordings.getById(sourceId);
+    if (!source) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    const draft = this.cutDrafts.getById(draftId);
+    if (!draft || draft.sourceId !== sourceId) throw new AppError("NOT_FOUND", 404, "Cut draft not found");
+    if (draft.status !== "previewing") throw new AppError("STATUS_CONFLICT", 409, "Cut draft is not previewing");
+
+    const durationSeconds = (toUnixMilliseconds(source.stopAt, "stopAt") - toUnixMilliseconds(source.startAt, "startAt")) / 1000;
+    const parsed = parseCutRequest({ mode: draft.mode, ...(JSON.parse(draft.params) as Record<string, unknown>) }, durationSeconds);
+
+    if (input !== undefined && input !== null && typeof input !== "object") throw new AppError("VALIDATION_ERROR", 400, "Request body must be an object");
+    const body = (input ?? {}) as { keep?: unknown; titles?: unknown };
+
+    let keepIndices: number[];
+    if (body.keep === undefined) {
+      keepIndices = draft.mode === "trim" ? [0] : parsed.segments.map((_segment, index) => index);
+    } else {
+      if (!Array.isArray(body.keep)) throw new AppError("VALIDATION_ERROR", 400, "keep must be an array of piece indices");
+      const seen = new Set<number>();
+      for (const raw of body.keep) {
+        if (!Number.isInteger(raw) || (raw as number) < 0 || (raw as number) >= parsed.segments.length) throw new AppError("VALIDATION_ERROR", 400, "keep contains an invalid piece index");
+        seen.add(raw as number);
+      }
+      keepIndices = [...seen].sort((a, b) => a - b);
+      if (keepIndices.length === 0) throw new AppError("VALIDATION_ERROR", 400, "keep must include at least one piece index");
+    }
+
+    let titles: Record<string, unknown> = {};
+    if (body.titles !== undefined) {
+      if (typeof body.titles !== "object" || body.titles === null || Array.isArray(body.titles)) throw new AppError("VALIDATION_ERROR", 400, "titles must be an object keyed by piece index");
+      titles = body.titles as Record<string, unknown>;
+      for (const key of Object.keys(titles)) {
+        const index = Number(key);
+        if (!Number.isInteger(index) || index < 0 || index >= parsed.segments.length) throw new AppError("VALIDATION_ERROR", 400, "titles contains an invalid piece index");
+      }
+    }
+
+    const sourceStartMs = toUnixMilliseconds(source.startAt, "startAt");
+    const derived: Recording[] = [];
+    for (const index of keepIndices) {
+      const segment = parsed.segments[index]!;
+      const newId = recordingId();
+      const piecePath = join(draft.workingDir, `piece-${index}.ts`);
+      const destPath = join(this.config.recordingsDir, `${newId}.ts`);
+      await rename(piecePath, destPath);
+      const titleOverride = titles[String(index)];
+      const title = titleOverride !== undefined
+        ? text(titleOverride, `titles[${index}]`)
+        : draft.mode === "trim" ? `${source.title} (cut)` : `${source.title} (part ${index + 1})`;
+      const created = this.recordings.create({
+        id: newId,
+        url: source.url,
+        title,
+        stage: source.stage,
+        artist: source.artist,
+        venue: source.venue,
+        event: source.event,
+        cookieId: null,
+        quality: source.quality,
+        startAt: toRfc3339(sourceStartMs + segment.start * 1000),
+        stopAt: toRfc3339(sourceStartMs + segment.end * 1000),
+        status: "recorded",
+        unitName: `${newId}.service`,
+        tsPath: destPath,
+        cutFromId: sourceId,
+      });
+      derived.push(created);
+    }
+
+    this.cutDrafts.markPromoted(draftId);
+    await rm(draft.workingDir, { recursive: true, force: true });
+
+    return { recordings: derived.map(mapRecording) };
+  }
+
+  async abandonCutDraft(sourceId: string, draftId: string): Promise<void> {
+    const source = this.recordings.getById(sourceId);
+    if (!source) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    const draft = this.cutDrafts.getById(draftId);
+    if (!draft || draft.sourceId !== sourceId) throw new AppError("NOT_FOUND", 404, "Cut draft not found");
+    await rm(draft.workingDir, { recursive: true, force: true });
+    this.cutDrafts.delete(draftId);
   }
 
   async patchRecording(id: string, input: RecordingPatch): Promise<{ recording: ReturnType<typeof mapRecording>; runtime_updated?: boolean; relaunched?: boolean; stop?: { attempted: true; confirmed: boolean } }> {
@@ -423,15 +513,38 @@ export class RecorderService {
     }
   }
 
+  // Mirrors autoSweepTrash's shape for the cut-draft side of orphan cleanup:
+  // any draft still `previewing` past maxAgeMs (an abandoned tab, or a first
+  // screen closed after a draft was already created) has its working folder
+  // and row removed. The row is only dropped once its folder is gone, so a
+  // removal failure leaves the draft intact rather than orphaning the folder.
+  async sweepStaleCutDrafts(maxAgeMs: number = 24 * 60 * 60 * 1000): Promise<void> {
+    const threshold = Date.now() - maxAgeMs;
+    for (const draft of this.cutDrafts.listStaleOlderThan(threshold)) {
+      try {
+        await rm(draft.workingDir, { recursive: true, force: true });
+        this.cutDrafts.delete(draft.id);
+      } catch (error) {
+        console.error(`Failed to sweep stale cut draft ${draft.id} (${draft.workingDir}):`, error);
+      }
+    }
+  }
+
   // Shared by permanentDeleteRecording and autoSweepTrash. Purges the row only
   // if the unlink succeeds (or the file was already gone), so an unlink
   // failure leaves the row intact instead of orphaning the file. purge()
   // itself only deletes rows still actually trashed, so a concurrent restore
-  // racing the unlink can't be undone by a purge that lands after it.
+  // racing the unlink can't be undone by a purge that lands after it. Any
+  // leftover `<id>/` cut working folder (an abandoned/stale draft next to a
+  // recording that was itself a cut source) is best-effort cleaned up too --
+  // its failure never blocks the row purge.
   private async purgeOne(recording: Recording): Promise<void> {
     await unlink(recording.tsPath).catch((error) => {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
       throw error;
+    });
+    await rm(join(this.config.recordingsDir, recording.id), { recursive: true, force: true }).catch((error) => {
+      console.error(`Failed to remove cut working folder for ${recording.id}:`, error);
     });
     this.recordings.purge(recording.id);
   }

@@ -79,13 +79,17 @@ export async function startServer(config: Config = loadConfig(), nodeVersion = p
     throw error;
   }
 
-  await recorder.autoSweepTrash().catch((error: unknown) => {
-    console.error("Auto-sweep trash failed:", error);
-  });
-  const dailySweepInterval = setInterval(() => {
-    recorder.autoSweepTrash().catch((error: unknown) => {
+  const runSweeps = async (): Promise<void> => {
+    await recorder.autoSweepTrash().catch((error: unknown) => {
       console.error("Auto-sweep trash failed:", error);
     });
+    await recorder.sweepStaleCutDrafts().catch((error: unknown) => {
+      console.error("Sweep stale cut drafts failed:", error);
+    });
+  };
+  await runSweeps();
+  const dailySweepInterval = setInterval(() => {
+    runSweeps().catch(() => undefined);
   }, 24 * 60 * 60 * 1000);
 
   return {

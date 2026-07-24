@@ -106,9 +106,12 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
   app.get("/recordings", async (request, response, next) => {
     try {
       const trashed = request.query.trashed === "true" ? true : undefined;
+      const cutFrom = typeof request.query.cut_from === "string" ? request.query.cut_from : undefined;
       const recordings = trashed !== undefined
         ? recorder.listRecordings(undefined, { trashed })
-        : recorder.listRecordings(request.query.status);
+        : cutFrom !== undefined
+          ? recorder.listRecordings(undefined, { cutFromId: cutFrom })
+          : recorder.listRecordings(request.query.status);
       const result: { recordings: unknown; is_recording: boolean; disk?: { actual_bytes: number; projected_bytes: number } } = {
         recordings,
         is_recording: recorder.listRecordings("recording").length > 0,
@@ -182,6 +185,12 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
         if (error) next(error);
       });
     } catch (error) { next(error); }
+  });
+  app.post("/recordings/:id/cut/:draftId/keep", json, async (request, response, next) => {
+    try { response.status(200).json(await recorder.keepCutDraft(request.params.id, request.params.draftId, request.body)); } catch (error) { next(error); }
+  });
+  app.delete("/recordings/:id/cut/:draftId", async (request, response, next) => {
+    try { await recorder.abandonCutDraft(request.params.id, request.params.draftId); response.status(204).end(); } catch (error) { next(error); }
   });
   app.delete("/recordings/:id/file", async (request, response, next) => {
     try { await recorder.trashRecording(request.params.id); response.status(204).end(); } catch (error) { next(error); }

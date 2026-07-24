@@ -50,6 +50,7 @@ export interface CreateRecordingInput {
   quality: string;
   startAt: UtcInstant;
   stopAt: UtcInstant;
+  status?: RecordingStatus;
   unitName: string;
   tsPath: string;
   cutFromId?: string | null;
@@ -159,11 +160,13 @@ export class RecordingRepository {
     const stopAt = timestamp(input.stopAt, "stopAt");
     if (startAt >= stopAt) throw new RangeError("startAt must be before stopAt");
     const now = timestamp(input.now, "now");
+    const status = input.status ?? "scheduled";
+    assertStatus(status);
     return this.database.transaction(() => {
       this.database.prepare(`INSERT INTO recordings
         (id, url, title, stage, artist, venue, event, cookie_id, quality, start_at, stop_at, status, unit_name, ts_path, cut_from_id, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?)`)
-        .run(input.id, input.url, input.title, input.stage ?? null, input.artist ?? null, input.venue ?? null, input.event ?? null, input.cookieId ?? null, input.quality, startAt, stopAt, input.unitName, input.tsPath, input.cutFromId ?? null, now, now);
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(input.id, input.url, input.title, input.stage ?? null, input.artist ?? null, input.venue ?? null, input.event ?? null, input.cookieId ?? null, input.quality, startAt, stopAt, status, input.unitName, input.tsPath, input.cutFromId ?? null, now, now);
       return this.getRequired(input.id);
     })();
   }
@@ -173,7 +176,7 @@ export class RecordingRepository {
     return row === undefined ? undefined : mapRecording(row);
   }
 
-  list(filters: { status?: RecordingStatus; trashed?: boolean } = {}): Recording[] {
+  list(filters: { status?: RecordingStatus; trashed?: boolean; cutFromId?: string } = {}): Recording[] {
     if (filters.status !== undefined) assertStatus(filters.status);
     let whereClause = "";
     const params: Array<string | null> = [];
@@ -185,6 +188,10 @@ export class RecordingRepository {
     if (filters.status !== undefined) {
       whereClause += (whereClause ? " AND" : " WHERE") + " recordings.status = ?";
       params.push(filters.status);
+    }
+    if (filters.cutFromId !== undefined) {
+      whereClause += (whereClause ? " AND" : " WHERE") + " recordings.cut_from_id = ?";
+      params.push(filters.cutFromId);
     }
     const rows = this.database.prepare(`${selectColumns}${whereClause} ORDER BY ${filters.trashed === true ? "recordings.trashed_at DESC" : "recordings.created_at DESC"}`).all(...params);
     return (rows as RecordingRow[]).map(mapRecording);
