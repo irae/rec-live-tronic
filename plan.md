@@ -600,23 +600,14 @@ keeps the "fed by existing polling" property.
 
 **Complexity: Medium.** Scheduling and download quality-of-life — a fixed
 duration default, a create-and-start-now entry mode, a faster reconciler tick, an
-oEmbed title prefill, and a raw-`.ts` download affordance — plus one
-**research-gated** item (the metadata-driven quality picker). Each shippable item
-is small and independent; the Phase 0 invariants are untouched (the API stays the
-sole SQLite writer, the reconciler stays a finite idempotent tick, no request
-data reaches a shell or becomes a path/unit identifier). **No migration and no
-new `recordings` column** — every item here rides existing columns and existing
-routes, with at most one new best-effort read-only route.
-
-**Research-and-pause gate (quality picker only).** The metadata-driven quality
-picker below depends on a streamlink capability that is **not yet confirmed on
-`irae-sheeta`** and on formats that may not exist at schedule time. It is a real
-stop-and-ask point (same shape as Phase 5's research gate): resolve the open
-questions at the end of this phase **before** building the picker. Everything
-else in Phase 4 (duration default, Now mode, tick, title prefill, download) is
-independent of that gate and ships without it — the current static quality pills
-(`best`/`1080p`/`720p`/`480p` in `ScheduleView.vue`) stay exactly as they are
-until the gate clears.
+oEmbed title prefill, a raw-`.ts` download affordance, and a metadata-driven
+quality picker for Now mode. Each shippable item is small and independent; the
+Phase 0 invariants are untouched (the API stays the sole SQLite writer, the
+reconciler stays a finite idempotent tick, no request data reaches a shell or
+becomes a path/unit identifier). **No migration and no new `recordings` column**
+— every item here rides existing columns and existing routes, with two new
+best-effort read-only routes (the oEmbed prefill and the streamlink-formats
+probe).
 
 **Decisions made for this phase.**
 
@@ -699,6 +690,20 @@ conventions.
 - `POST /recordings` — **unchanged.** Now mode uses it as-is with a client-computed
   `start_at = <now>` / `stop_at = <now + duration>` payload; no new field, no new
   route, no new status.
+- `GET /recordings/formats?url=<validated youtube url>` (new, best-effort,
+  read-only) — runs `streamlink --json <url>` as a subprocess to probe a live
+  stream's available formats. Reuses this repo's no-shell-injection discipline:
+  the `validateUrl`-checked URL goes into argv, never a shell string (same pattern
+  as `buildStreamlinkArgs` / `streamlink-command.ts`), with a bounded timeout
+  (`~5–8s` — streamlink has to actually hit YouTube). Parses the JSON `streams`
+  object's keys for the named-quality list (skip `worst`; keep `best` and the
+  resolution-named entries) and returns them as an ordered list (numeric quality
+  descending) plus which entry shares the same underlying URL as `best` (useful
+  for tests/debugging even though the UI shows no parenthetical). `400` only if
+  `url` fails the existing `validateUrl` YouTube-host check (same check as
+  `oembed` / `createRecording`); otherwise `200` always, with an empty/null
+  formats result on any failure (video not live, streamlink error, timeout) —
+  same "never blocks the form" contract as the oEmbed route.
 
 **UI.**
 
@@ -716,21 +721,55 @@ conventions.
   trash view) pointing at `GET /recordings/:id/file?download=1`, alongside the
   existing copy-stream-URL / player controls. Trashed recordings surface the same
   download link in the trash view since the route serves them.
-- **Quality picker overhaul** — gated (see research gate + open questions); not
-  built until the gate clears. Until then the static pills stay.
+- **Metadata-driven quality picker (Now mode only).** In Now mode, once a URL is
+  entered, the static quality pills are replaced by pills driven by the live
+  stream's real formats (fetched from the new `GET /recordings/formats` probe):
+  `best` as its own fixed pill, then the 2 highest-quality named formats as extra
+  pills, then a dropdown listing every remaining probed format. On any probe
+  failure/timeout the form falls back to the existing static pills. Scheduled
+  bookings keep the static `best`/`1080p`/`720p`/`480p` pills unchanged (see the
+  Quality picker section below).
 
-**Quality picker (research-gated — do NOT build until the gate clears).** Intended
-end state (owner's verbatim intent): the available-formats list is driven by the
-stream's real metadata — **`best` always kept and shown with a parenthetical of
-what it resolved to** (e.g. `best (1080p60)`), then **2 extra pills ordered by
-quality**, then a **dropdown listing all formats**, **video-only** until Phase 6
-adds audio-only entries. This is **not specified as an implementation here** because
-its feasibility is unconfirmed — see the open questions below. Do not invent a
-streamlink capability or a "best resolves to X" mechanism that has not been
-verified live first.
+**Quality picker (fully decided — every open question resolved via live research
+on `irae-sheeta`).** The available-formats list is driven by the live stream's
+real metadata, fetched from the new backend probe. Settled decisions:
 
-**Functional tests** (server suite, test names only). The picker research item
-adds no server test until it is designed post-gate.
+- **`best` is its own fixed pill, no parenthetical.** It is shown exactly as-is,
+  at parity with streamlink's own `best` alias — **not** `best (resolves to X)`.
+  It is expected and accepted that `best`'s pill and one of the named-quality
+  pills resolve to the identical stream for a given video; that is correct
+  behaviour, not a bug to hide.
+- **Only feasible in Now mode.** Confirmed live: `streamlink --json <url>` only
+  returns per-format labels once a stream is actually live (a non-live video ID
+  returns "No playable streams found"; the actually-live production stream
+  returned a full format list). Scheduled future bookings keep the existing
+  static `best`/`1080p`/`720p`/`480p` pills unchanged — this picker replaces the
+  pills **only in Now mode, once a URL is entered.**
+- **No codec-variant selection is needed — confirmed a non-issue.** The pinned
+  streamlink 8.4.0 source on `irae-sheeta`
+  (`/opt/pipx/venvs/streamlink/lib/python3.13/site-packages/streamlink/plugins/youtube.py`)
+  has an `adp_video` itag table where two itags (266 and 138) both map to the
+  display name "2160p" with different codecs (VP9 vs H.264) — but that whole
+  adaptive/DASH dual-codec path is explicitly skipped for live content
+  (`if not is_live: streams.update(self._create_adaptive_streams(adaptive_formats))`).
+  Live streams only ever go through the HLS-manifest path
+  (`HLSStream.parse_variant_playlist`), which yields exactly one stream per named
+  quality — confirmed empirically too: a real `streamlink --json` probe against
+  the live production stream returned exactly one key each for
+  `144p/240p/360p/480p/720p/1080p/worst/best`, no duplicates. For this app's
+  actual use case (live YouTube captures only) there is never more than one
+  stream per quality label, so no codec-preference logic is needed or buildable —
+  there is nothing to choose between.
+- **UI shape.** `best` as its own fixed pill, then the 2 highest-quality named
+  formats from the probe as extra pills (ordered by quality — e.g. if the probe
+  returns 1080p/720p/480p/360p/240p/144p, show 1080p and 720p as the 2 extra
+  pills), then a dropdown listing every remaining probed format. Video-only
+  (audio-only formats are out of scope until Phase 6). If the probe
+  fails/times out (non-live URL, network failure, streamlink not confirming a
+  format), fall back to the existing static pills — never block or error the
+  form.
+
+**Functional tests** (server suite, test names only).
 
 ```ts
 // test/functional/server.test.ts (additional blocks)
@@ -740,11 +779,12 @@ t.test("rejects an oembed prefill lookup for a non-youtube url");
 t.test("serves a finished recording file as an attachment when download=1");
 t.test("serves a trashed recording's file for download");
 t.test("creates a now-mode recording that starts at the current time");
+t.test("returns ordered named formats and the best-equivalent entry for a live url");
+t.test("returns an empty formats result instead of erroring when the probe fails");
+t.test("rejects a formats probe for a non-youtube url");
 ```
 
-**Implementation sequence.** (The quality-picker research gate at step 6 is an
-owner-review checkpoint, not the finish line — steps 1–5 ship independently of
-it.)
+**Implementation sequence.**
 
 1. Lower the reconciler tick: change `OnBootSec`, `OnUnitActiveSec`, and the
    `Description` in `systemd/rec-live-tronic-reconciler.timer` from 30s to 10s
@@ -766,9 +806,22 @@ it.)
    `?download=1`. Functional tests above; verify on `irae-sheeta` (Now-mode start
    latency ≤10s, prefill fills an empty title, download serves an attachment for
    both a live archive row and a trashed row). Commit.
-6. **Quality-picker research gate** — answer the open questions on `irae-sheeta`,
-   review with the owner, then plan and build the metadata-driven picker (or record
-   that it stays the static pills). Separate commit(s) after the gate clears.
+6. Backend formats probe: add `GET /recordings/formats` in `src/app.ts` running
+   `streamlink --json <url>` as a subprocess through the existing
+   no-shell-injection path (validated URL into argv, as in
+   `streamlink-command.ts`), with a bounded `~5–8s` timeout; parse the `streams`
+   keys (skip `worst`, keep `best` + resolution-named entries), return the ordered
+   named-format list (numeric quality descending) plus the entry sharing `best`'s
+   underlying URL; `400` only on a non-YouTube URL (`validateUrl`), `200` with an
+   empty/null result on any failure. Functional tests for the probe. Commit.
+7. Client: in Now mode, on URL blur fetch `GET /recordings/formats` (an `api.ts`
+   helper) and replace the static pills with the probed picker — `best` fixed
+   pill, the 2 highest-quality named formats as extra pills, a dropdown of the
+   remaining probed formats; fall back to the static pills on any probe
+   failure/timeout. Scheduled mode keeps the static pills unchanged. Verify on
+   `irae-sheeta` against the live production stream (probe returns the named
+   formats, the picker renders, a non-live/failed probe falls back cleanly).
+   Commit.
 
 **Acceptance criteria — what "Phase 4 done" looks like.**
 - [ ] The duration field defaults to `1:10` on a fresh form and after each submit,
@@ -783,31 +836,12 @@ it.)
 - [ ] A raw `.ts` download affordance downloads with a human-friendly
       `<title>.ts` filename and works for a trashed recording, with the inline
       streaming/player path unchanged.
-- [ ] curl parity holds for the oEmbed prefill and the download variant — no
-      browser-only path.
-- [ ] The quality-picker research gate is answered and reviewed before any picker
-      build; the static pills remain until then.
-
-**Open questions (quality picker — resolve at the step 6 gate, do not guess
-now).**
-- **Are per-format labels queryable before/at schedule time at all?** Scheduled
-  bookings are created **hours before** the stream goes live, but a stream's
-  available formats only exist **once it is live**. So a metadata-driven picker
-  likely only applies to **Now mode** (stream already live); scheduled bookings
-  may have to keep the static pills. Confirm this timing constraint before
-  designing the UX.
-- **Does `streamlink --json <url>` reliably expose YouTube's per-format list and
-  what `best` resolves to, on the pinned streamlink 8.4.0 on `irae-sheeta`?** This
-  is an **unconfirmed streamlink capability** — verify live (it is not installed
-  in this dev environment and the host's streamlink is human-owned) before
-  building the "best (resolves to X)" parenthetical or the formats list. If it
-  does not cleanly expose the `best → named-quality` mapping, the parenthetical is
-  not implementable as specified and the owner must pick a fallback.
-- **New backend probe surface.** A metadata-driven picker needs the server to shell
-  `streamlink --json` for a user-supplied (validated) URL — a new subprocess
-  boundary. It must reuse the existing no-shell-injection discipline (validated
-  URL, argv never a shell fragment, as in `buildStreamlinkArgs`) and a bounded
-  timeout. Design this only after the two questions above are answered yes.
+- [ ] curl parity holds for the oEmbed prefill, the download variant, and the
+      formats probe — no browser-only path.
+- [ ] In Now mode, entering a live stream URL replaces the static pills with a
+      metadata-driven picker (`best` fixed pill, 2 highest-quality named pills, a
+      dropdown of the rest); a failed/non-live probe falls back to the static
+      pills without blocking the form. Scheduled mode keeps the static pills.
 
 ### Phase 5 — editing actions
 
@@ -827,6 +861,30 @@ produce-then-hold-uncommitted-until-confirmed) and **pause for the owner's
 decision** before implementing the trim/split confirm UX. The job mechanism and
 derived-row pattern below hold regardless of which preview model the owner picks;
 the gate decides the confirm/undo UX wrapped around them.
+
+**Research findings (for owner review — the gate above is NOT cleared; these
+answer the research question and await the owner's sign-off).**
+
+1. **In-player client-side preview is cheap but imprecise.** The existing
+   `mpegts.js` player already supports client-side seeking within a loaded file
+   with zero backend work, so a "mark start/end, scrub-preview" overlay is
+   buildable cheaply. But this repo already has a documented, shipped limitation
+   that `mpegts.js` cannot give accurate seek-to-end duration for MPEG-TS
+   (progressively accurate only as more of the file demuxes), so in/out accuracy
+   would be imprecise — exactly how imprecise is unconfirmed without live-testing.
+2. **A true server-side preview clip duplicates the real trim job.** A throwaway
+   `ffmpeg -ss/-to -c copy` preview clip would duplicate the actual trim job Phase
+   5 already defines, violating this repo's simplicity guidelines for a
+   single-use-case mechanism.
+3. **Trash-and-redo already covers a bad cut with zero new code.** Phase 3's trash
+   (soft-delete, restore, 30-day purge) already applies to Phase 5's derived rows,
+   and the source is never modified, so a bad cut can simply be trashed and redone
+   with no new code.
+
+**Recommendation (pending owner review):** no dedicated preview mechanism — rely
+on trash-and-redo as the primary safety net, with the existing player's free
+scrub capability as an optional aid for picking timestamps before submitting a
+cut.
 
 Trim and split follow the **derived-recording-row** pattern: each produces one
 or more new recording rows with their own server-generated IDs whose output
