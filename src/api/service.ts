@@ -97,8 +97,7 @@ export class RecorderService {
     const id = recordingId();
     const title = text(input.title, "title");
     const url = validateUrl(input.url);
-    const oembed = await fetchOembedMetadata(this.config.oembedEndpoint, url);
-    const stage = stageFromTitle(title) ?? oembed.authorName;
+    const stage = stageFromTitle(title) ?? (await fetchOembedMetadata(this.config.oembedEndpoint, url)).authorName;
     return mapRecording(this.recordings.create({ id, url, title, stage, cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
   }
 
@@ -190,11 +189,7 @@ export class RecorderService {
   }
 
   async getOembedMetadata(url: string): Promise<{ author_name: string | null; title: string | null }> {
-    try {
-      validateUrl(url);
-    } catch {
-      throw new AppError("VALIDATION_ERROR", 400, "url must be an HTTPS YouTube URL");
-    }
+    validateUrl(url);
     const oembed = await fetchOembedMetadata(this.config.oembedEndpoint, url);
     return { author_name: oembed.authorName, title: oembed.title };
   }

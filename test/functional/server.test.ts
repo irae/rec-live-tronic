@@ -674,12 +674,6 @@ t.test("purges only trash older than thirty days on the startup sweep", async (t
 });
 
 t.test("returns oembed author and title for a valid youtube url", async (t) => {
-  const address = running.publicServer.address();
-  t.ok(address && typeof address !== "string");
-  if (!address || typeof address === "string") return;
-  const base = `http://127.0.0.1:${address.port}`;
-
-  // Create a test double oEmbed endpoint
   const { createServer } = await import("node:http");
   const testDouble = createServer((req, res) => {
     if (req.url?.includes("url=https")) {
@@ -698,22 +692,41 @@ t.test("returns oembed author and title for a valid youtube url", async (t) => {
   const testDoubleAddress = testDouble.address();
   if (!testDoubleAddress || typeof testDoubleAddress === "string") {
     testDouble.close();
-    return;
+    throw new Error("Test double failed to bind a port");
   }
 
+  const oembedRoot = await mkdtemp(join(tmpdir(), "rec-live-tronic-oembed-"));
+  const streamlink = join(oembedRoot, "streamlink");
+  await writeFile(streamlink, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(streamlink, 0o755);
+  const oembedConfig = loadConfig({
+    REC_LIVE_HOST: "127.0.0.1",
+    REC_LIVE_PORT: "0",
+    REC_LIVE_DATA_DIR: join(oembedRoot, "state"),
+    REC_LIVE_RECORDINGS_DIR: join(oembedRoot, "recordings"),
+    REC_LIVE_PRIVATE_SOCKET: join(oembedRoot, "run", "api.sock"),
+    REC_LIVE_STREAMLINK_BIN: streamlink,
+    REC_LIVE_OEMBED_ENDPOINT: `http://127.0.0.1:${testDoubleAddress.port}/oembed`,
+  });
+  const oembedServer = await startServer(oembedConfig, "24.0.0");
+
   try {
-    const testDoubleUrl = `http://127.0.0.1:${testDoubleAddress.port}/oembed`;
+    const address = oembedServer.publicServer.address();
+    t.ok(address && typeof address !== "string");
+    if (!address || typeof address === "string") return;
+    const base = `http://127.0.0.1:${address.port}`;
+
     const response = await fetch(
       `${base}/recordings/oembed?url=https://www.youtube.com/watch?v=test`
     );
 
-    // Since our running server uses the unreachable port 1, we expect null values.
-    // But let's test the valid route works with no error
     t.equal(response.status, 200);
     const body = await response.json() as { author_name: string | null; title: string | null };
-    t.ok(body.author_name === null || typeof body.author_name === "string");
-    t.ok(body.title === null || typeof body.title === "string");
+    t.equal(body.author_name, "Test Channel");
+    t.equal(body.title, "Test Stream Title");
   } finally {
+    await oembedServer.close();
+    await rm(oembedRoot, { recursive: true, force: true });
     testDouble.close();
   }
 });

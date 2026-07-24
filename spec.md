@@ -49,7 +49,7 @@ list is the pointer, not the depth.
 
 - **SQLite (WAL mode, accessed with `better-sqlite3`)** — recordings, cookies, candidates. WAL so the API writes while the reconciler reads without blocking.
 - **HTTP API (Node + Express)** — the only writer to SQLite in normal operation. curl-first.
-- **Reconciler daemon** — thin loop (run as a systemd timer/service, tick every 30–60s). Holds no in-memory state worth losing. Diffs SQLite ⇄ live `rec-*` systemd units and acts.
+- **Reconciler daemon** — thin loop (run as a systemd timer/service, tick every 10s). Holds no in-memory state worth losing. Diffs SQLite ⇄ live `rec-*` systemd units and acts.
 - **streamlink** — the recorder binary. Writes `.ts` (append-safe; killable mid-write and still playable).
 - **ffmpeg -c copy** — remux/convert `.ts` → final container. *(Phase 4, deprioritized)*
 - **Web UI** — a Vue 3 SPA (Vite build, `vue-router` client-side routing at `/`, `/schedule`, `/watch/:id` — deliberately not `/recordings/:id`, which the real JSON API already owns), served as static files by the same Express API (`express.static` plus an SPA-fallback route so deep-linking/refreshing a client route works). Covers schedule (create/edit/cancel/start-now/stop-early), archive (finished recordings), and per-recording detail (playback, copy-URL, delete). Playback of finished recordings uses `mpegts.js` (client-side MSE-based transmuxing): no current major browser (Chrome, Edge, Safari, Firefox) natively plays a standalone `.ts` file via a plain `<video src>` (see `docs/browser-playback-research.md`). *(Phase 2, done.)*

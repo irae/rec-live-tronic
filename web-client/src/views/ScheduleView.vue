@@ -340,11 +340,11 @@ async function handleAddRecording(): Promise<void> {
     }
 
     // Reasonable defaults instead of demanding every field: no start means
-    // now, no stop/duration means 60 minutes from start.
+    // now, no stop/duration means 70 minutes (1:10) from start.
     const startDate = form.start ? new Date(form.start) : new Date();
     const stopDate = form.stop
       ? new Date(form.stop)
-      : new Date(startDate.getTime() + (parseDurationMinutes(form.duration) ?? 60) * 60_000);
+      : new Date(startDate.getTime() + (parseDurationMinutes(form.duration) ?? 70) * 60_000);
 
     const newRecording = await api.createRecording({
       url: form.url,
@@ -407,11 +407,12 @@ function resetForm(): void {
 // Best-effort title prefill: never blocks or errors the form on a slow/failed
 // oEmbed lookup, and never overwrites a title the user already typed.
 async function handleUrlBlur(): Promise<void> {
-  if (!form.url || form.title) return;
+  const requestedUrl = form.url;
+  if (!requestedUrl || form.title) return;
   try {
-    const { authorName, title } = await api.lookupOembed(form.url);
-    if (form.title) return;
-    form.title = title || authorName || (entryMode.value === "now" ? form.url.trim() : "");
+    const { authorName, title } = await api.lookupOembed(requestedUrl);
+    if (form.title || form.url !== requestedUrl) return;
+    form.title = title || authorName || (entryMode.value === "now" ? requestedUrl.trim() : "");
   } catch (err) {
     console.error("Failed to look up stream info for title prefill:", err);
   }
