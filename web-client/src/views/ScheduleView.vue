@@ -161,7 +161,7 @@
               </div>
             </div>
 
-            <div class="field">
+            <div class="field field--submit">
               <button class="btn btn--primary" type="submit">＋ Add to lineup</button>
             </div>
           </div>
@@ -828,7 +828,7 @@ function formatTimeInfo(rec: Recording): string {
   margin-bottom: 16px;
 }
 
-.field:last-child {
+.field--submit {
   margin-bottom: 0;
 }
 

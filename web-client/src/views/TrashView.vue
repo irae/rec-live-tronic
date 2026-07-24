@@ -143,7 +143,12 @@ async function confirmDeleteForever(): Promise<void> {
   try {
     error.value = null;
     await api.permanentlyDeleteRecording(id);
-    trashedRecordings.value = trashedRecordings.value.filter((rec) => rec.id !== id);
+    // Re-fetch immediately rather than just filtering the row out locally --
+    // the list response also carries the disk-space figures (diskSpace is a
+    // shared ref populated as a side effect of any list call), so this
+    // updates the header's free-space reading right away instead of waiting
+    // for the next 60s poll tick.
+    trashedRecordings.value = await api.listTrashedRecordings();
     toast("Deleted permanently");
   } catch (err) {
     console.error("Failed to permanently delete recording:", err);
