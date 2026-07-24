@@ -1,7 +1,7 @@
 FROM node:24-trixie@sha256:eb2c73a27cf714b4b6b030f88ab72e62192c38b7d313ea3456695b8ae03c5f3c AS build
 
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 ca-certificates \
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 ca-certificates ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci

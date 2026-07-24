@@ -8,7 +8,7 @@ import { extractSegment } from "../../src/api/cut-extract.js";
 
 const execFileAsync = promisify(execFile);
 
-const ffmpegBin = process.env.REC_LIVE_TEST_FFMPEG_BIN ?? "/opt/homebrew/bin/ffmpeg";
+const ffmpegBin = process.env.REC_LIVE_TEST_FFMPEG_BIN ?? "ffmpeg";
 
 t.test("extractSegment writes a real, non-empty file to a .tmp-suffixed output path", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "rec-live-tronic-cut-extract-"));
