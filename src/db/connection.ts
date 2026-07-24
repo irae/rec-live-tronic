@@ -31,8 +31,13 @@ export function openDatabase(databasePath: string, options: DatabaseConnectionOp
 
   if (!readonly) {
     process.umask(0o007);
-    mkdirSync(dirname(databasePath), { recursive: true, mode: 0o770 });
-    chmodSync(dirname(databasePath), 0o770);
+    // The data directory is provisioned setgid (2770) by install-root.sh so
+    // rec-media group members share ownership of files created inside it;
+    // 0o770 here (without the setgid bit) would silently strip that on
+    // every DB open, which install-root.sh's post-install verification
+    // then catches as "incorrect data directory mode".
+    mkdirSync(dirname(databasePath), { recursive: true, mode: 0o2770 });
+    chmodSync(dirname(databasePath), 0o2770);
   }
 
   const database = new Database(databasePath, { readonly, fileMustExist: readonly });

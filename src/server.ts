@@ -35,9 +35,13 @@ function close(server: Server): Promise<void> {
 
 export async function startServer(config: Config = loadConfig(), nodeVersion = process.versions.node): Promise<RunningServer> {
   assertSupportedNodeVersion(nodeVersion);
-  await mkdir(config.dataDir, { recursive: true, mode: 0o770 });
-  await mkdir(config.cookiesDir, { recursive: true, mode: 0o770 });
-  await mkdir(config.recordingsDir, { recursive: true, mode: 0o770 });
+  // 2770 (setgid) so files created inside are shared with the rec-media
+  // group, matching install-root.sh's `install -d -m 2770` provisioning;
+  // mkdir's mode only applies when it actually creates the directory, so
+  // this only matters for a from-scratch bootstrap (e.g. local dev).
+  await mkdir(config.dataDir, { recursive: true, mode: 0o2770 });
+  await mkdir(config.cookiesDir, { recursive: true, mode: 0o2770 });
+  await mkdir(config.recordingsDir, { recursive: true, mode: 0o2770 });
   await mkdir(dirname(config.privateSocketPath), { recursive: true, mode: 0o750 });
 
   const database = openDatabase(config.databasePath);
