@@ -528,14 +528,29 @@ onUnmounted(() => {
   border: 2.5px dashed var(--fluoro);
   background: repeating-linear-gradient(45deg, rgba(255,59,31,.055) 0 10px, transparent 10px 20px);
   padding: 18px; display: grid; gap: 14px;
+  /* Both explicit: an implicit "auto" column still sizes to its widest
+     child's max-content (here, .mini's video preview), even once the outer
+     .cuts grid's own columns are correctly constrained -- so a two-up split
+     overflowed the page instead of the columns ever actually being 1fr.
+     minmax(0, 1fr) makes the single column definite and shrinkable; the
+     matching min-width: 0 stops THIS card from doing the same thing one
+     level up, inside .cuts. */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 .cutcard__top { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .cutcard__no { font-family: var(--mono); font-weight: 700; font-size: 11px; letter-spacing: .16em; text-transform: uppercase; color: var(--fluoro); }
 .cutcard__span { font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; color: var(--ink-soft); }
 .cutcard__span b { color: var(--ink); }
 
-.mini { position: relative; aspect-ratio: 16/9; border: 2px solid var(--line); overflow: hidden; background: #17142A; }
-.mini-video { width: 100%; height: 100%; background: #000; }
+.mini { position: relative; aspect-ratio: 16/9; border: 2px solid var(--line); overflow: hidden; background: #17142A; min-width: 0; }
+/* Absolutely positioned so the video's own intrinsic size (e.g. 1280x720)
+   never contributes to .mini's layout size -- .mini is sized purely by its
+   aspect-ratio. Without this, a <video>'s intrinsic width wins out over its
+   percentage width when an ancestor grid track sizes to content (nested
+   grids: .cutcard's own auto column sizes to its widest child's max-content,
+   even after the outer .cuts grid's columns are correctly constrained). */
+.mini-video { position: absolute; inset: 0; width: 100%; height: 100%; background: #000; }
 .mini__tag {
   position: absolute; top: 9px; left: 9px; font-family: var(--mono); font-size: 9px; letter-spacing: .12em;
   text-transform: uppercase; color: rgba(255,255,255,.72); z-index: 2; pointer-events: none;
