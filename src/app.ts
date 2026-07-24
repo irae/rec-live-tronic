@@ -172,6 +172,17 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
       });
     } catch (error) { next(error); }
   });
+  app.post("/recordings/:id/cut", json, async (request, response, next) => {
+    try { response.status(200).json(await recorder.createCutDraft(request.params.id, request.body)); } catch (error) { next(error); }
+  });
+  app.get("/recordings/:id/cut/:draftId/pieces/:index/file", (request, response, next) => {
+    try {
+      const { filePath } = recorder.getCutPieceFile(request.params.id, request.params.draftId, request.params.index);
+      response.sendFile(filePath, { headers: { "Content-Type": "video/mp2t" }, dotfiles: "allow" }, (error) => {
+        if (error) next(error);
+      });
+    } catch (error) { next(error); }
+  });
   app.delete("/recordings/:id/file", async (request, response, next) => {
     try { await recorder.trashRecording(request.params.id); response.status(204).end(); } catch (error) { next(error); }
   });

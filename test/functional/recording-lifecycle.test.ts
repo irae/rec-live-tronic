@@ -6,6 +6,7 @@ import { loadConfig, type Config } from "../../src/config.js";
 import { startServer, type RunningServer } from "../../src/server.js";
 import { openDatabase } from "../../src/db/connection.js";
 import { RecordingRepository, type Recording } from "../../src/recordings/repository.js";
+import { CutDraftRepository } from "../../src/recordings/cut-draft-repository.js";
 import { CookieRepository } from "../../src/cookies/repository.js";
 import { RecorderService } from "../../src/api/service.js";
 import type { SystemdClient } from "../../src/systemd/client.js";
@@ -164,7 +165,7 @@ t.test("live stop-time updates relaunch only after a confirmed stop", async (t) 
   const newStop = new Date(Date.now() + 600_000).toISOString();
   const apiDatabase = openDatabase(config.databasePath);
   try {
-    const service = new RecorderService(recordings, new CookieRepository(apiDatabase), config, systemd);
+    const service = new RecorderService(recordings, new CookieRepository(apiDatabase), config, systemd, new CutDraftRepository(apiDatabase));
     const result = await service.patchRecording(created.id, { stop_at: newStop });
     t.same(result.stop, { attempted: true, confirmed: true });
     t.equal(result.relaunched, true);

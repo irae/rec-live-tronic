@@ -1,14 +1,18 @@
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
-import { stat, unlink } from "node:fs/promises";
+import { mkdir, stat, unlink } from "node:fs/promises";
 import { basename, join } from "node:path";
 import { CookieRepository, type CookieMetadata } from "../cookies/repository.js";
 import { toUnixMilliseconds } from "../db/instants.js";
 import { RecordingRepository, recordingStatuses, type Recording, type RecordingStatus } from "../recordings/repository.js";
+import { CutDraftRepository, type CutDraft } from "../recordings/cut-draft-repository.js";
 import type { Config } from "../config.js";
 import type { SystemdClient } from "../systemd/client.js";
 import { AppError } from "../app.js";
 import { storeCookieAtomically } from "./storage.js";
+import { extractSegment } from "./cut-extract.js";
+import { parseCutRequest } from "./cut-request.js";
+import { formatOffset } from "../recordings/cut-offsets.js";
 
 const qualityValues = ["best", "1080p", "720p", "480p", "360p", "worst"] as const;
 const allowedYouTubeHosts = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"]);
@@ -42,6 +46,7 @@ function quality(value: unknown): string {
 
 function recordingId(): string { return `rec-${randomUUID().replaceAll("-", "")}`; }
 function cookieId(): string { return `cookie-${randomUUID().replaceAll("-", "")}`; }
+function cutDraftId(): string { return `cut-${randomUUID().replaceAll("-", "")}`; }
 
 function stageFromTitle(title: string): string | null {
   const parts = title.split(" - ").map((part) => part.trim());
@@ -130,12 +135,28 @@ function requireStatus(value: unknown): RecordingStatus {
   return value as RecordingStatus;
 }
 
+interface CutPieceResponse {
+  index: number;
+  start: string;
+  end: string;
+  duration: string;
+  file_url: string;
+}
+
+interface CutDraftResponse {
+  id: string;
+  mode: CutDraft["mode"];
+  status: CutDraft["status"];
+  pieces: CutPieceResponse[];
+}
+
 export class RecorderService {
   constructor(
     private readonly recordings: RecordingRepository,
     private readonly cookies: CookieRepository,
     private readonly config: Config,
     private readonly systemd: SystemdClient,
+    private readonly cutDrafts: CutDraftRepository,
   ) {}
 
   async createRecording(input: RecordingInput): Promise<ReturnType<typeof mapRecording>> {
@@ -178,6 +199,61 @@ export class RecorderService {
     const recording = this.recordings.getById(id);
     if (!recording) throw new AppError("NOT_FOUND", 404, "Recording not found");
     return { status: recording.status, tsPath: recording.tsPath, title: recording.title };
+  }
+
+  // Creates the source's active cut draft, or -- if one already exists --
+  // regenerates its preview pieces in place (the Adjust loop). Every -c copy
+  // extraction lands in recordingsDir/${sourceId}/piece-<index>.ts; the
+  // source row and its .ts are never touched.
+  async createCutDraft(sourceId: string, input: unknown): Promise<{ draft: CutDraftResponse }> {
+    const source = this.recordings.getById(sourceId);
+    if (!source) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    if (source.status !== "recorded") throw new AppError("STATUS_CONFLICT", 409, "Only finished recordings can be cut");
+    const durationSeconds = (toUnixMilliseconds(source.stopAt, "stopAt") - toUnixMilliseconds(source.startAt, "startAt")) / 1000;
+    const parsed = parseCutRequest(input, durationSeconds);
+
+    const workingDir = join(this.config.recordingsDir, sourceId);
+    await mkdir(workingDir, { recursive: true, mode: 0o770 });
+    for (let index = 0; index < parsed.segments.length; index += 1) {
+      const segment = parsed.segments[index]!;
+      const outputPath = join(workingDir, `piece-${index}.ts`);
+      await extractSegment(this.config.ffmpegBin, source.tsPath, segment, outputPath);
+    }
+
+    const existing = this.cutDrafts.getActiveBySource(sourceId);
+    const draft = this.cutDrafts.upsertPreviewing({
+      id: existing?.id ?? cutDraftId(),
+      sourceId,
+      mode: parsed.mode,
+      params: JSON.stringify(parsed.params),
+      workingDir,
+      pieceCount: parsed.segments.length,
+    });
+
+    return {
+      draft: {
+        id: draft.id,
+        mode: draft.mode,
+        status: draft.status,
+        pieces: parsed.segments.map((segment, index) => ({
+          index,
+          start: formatOffset(segment.start),
+          end: formatOffset(segment.end),
+          duration: formatOffset(segment.end - segment.start),
+          file_url: `/recordings/${sourceId}/cut/${draft.id}/pieces/${index}/file`,
+        })),
+      },
+    };
+  }
+
+  getCutPieceFile(sourceId: string, draftId: string, indexRaw: string): { filePath: string } {
+    const source = this.recordings.getById(sourceId);
+    if (!source) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    const draft = this.cutDrafts.getById(draftId);
+    if (!draft || draft.sourceId !== sourceId) throw new AppError("NOT_FOUND", 404, "Cut draft not found");
+    const index = Number(indexRaw);
+    if (!Number.isInteger(index) || index < 0 || index >= draft.pieceCount) throw new AppError("NOT_FOUND", 404, "Cut piece not found");
+    return { filePath: join(draft.workingDir, `piece-${index}.ts`) };
   }
 
   async patchRecording(id: string, input: RecordingPatch): Promise<{ recording: ReturnType<typeof mapRecording>; runtime_updated?: boolean; relaunched?: boolean; stop?: { attempted: true; confirmed: boolean } }> {

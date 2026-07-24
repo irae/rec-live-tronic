@@ -24,6 +24,7 @@ export interface Recording {
   trashedAt: string | null;
   cookieId: string | null;
   cookiePath: string | null;
+  cutFromId: string | null;
   quality: string;
   startAt: string;
   stopAt: string;
@@ -51,6 +52,7 @@ export interface CreateRecordingInput {
   stopAt: UtcInstant;
   unitName: string;
   tsPath: string;
+  cutFromId?: string | null;
   now?: UtcInstant;
 }
 
@@ -89,6 +91,7 @@ interface RecordingRow {
   trashed_at: number | null;
   cookie_id: string | null;
   cookie_path: string | null;
+  cut_from_id: string | null;
   quality: string;
   start_at: number;
   stop_at: number;
@@ -105,7 +108,7 @@ interface RecordingRow {
 const selectColumns = `
   SELECT recordings.id, recordings.url, recordings.title, recordings.stage, recordings.artist, recordings.venue, recordings.event, recordings.trashed_at, recordings.cookie_id, cookies.path AS cookie_path,
          recordings.quality, recordings.start_at, recordings.stop_at, recordings.status, recordings.unit_name,
-         recordings.ts_path, recordings.last_started_boot_id, recordings.last_started_stop_at, recordings.version, recordings.created_at, recordings.updated_at
+         recordings.ts_path, recordings.last_started_boot_id, recordings.last_started_stop_at, recordings.cut_from_id, recordings.version, recordings.created_at, recordings.updated_at
   FROM recordings LEFT JOIN cookies ON cookies.id = recordings.cookie_id`;
 
 function assertStatus(status: string): asserts status is RecordingStatus {
@@ -133,6 +136,7 @@ function mapRecording(row: RecordingRow): Recording {
     trashedAt: row.trashed_at === null ? null : toRfc3339(row.trashed_at),
     cookieId: row.cookie_id,
     cookiePath: row.cookie_path,
+    cutFromId: row.cut_from_id,
     quality: row.quality,
     startAt: toRfc3339(row.start_at),
     stopAt: toRfc3339(row.stop_at),
@@ -157,9 +161,9 @@ export class RecordingRepository {
     const now = timestamp(input.now, "now");
     return this.database.transaction(() => {
       this.database.prepare(`INSERT INTO recordings
-        (id, url, title, stage, artist, venue, event, cookie_id, quality, start_at, stop_at, status, unit_name, ts_path, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`)
-        .run(input.id, input.url, input.title, input.stage ?? null, input.artist ?? null, input.venue ?? null, input.event ?? null, input.cookieId ?? null, input.quality, startAt, stopAt, input.unitName, input.tsPath, now, now);
+        (id, url, title, stage, artist, venue, event, cookie_id, quality, start_at, stop_at, status, unit_name, ts_path, cut_from_id, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?)`)
+        .run(input.id, input.url, input.title, input.stage ?? null, input.artist ?? null, input.venue ?? null, input.event ?? null, input.cookieId ?? null, input.quality, startAt, stopAt, input.unitName, input.tsPath, input.cutFromId ?? null, now, now);
       return this.getRequired(input.id);
     })();
   }

@@ -11,11 +11,30 @@ let root = "";
 let running: RunningServer;
 let config: Config;
 
+// Stands in for a real ffmpeg -c copy extraction: since test fixtures are
+// plain-text stand-ins for .ts media (not real transport streams), the stub
+// just copies the argv-provided input (after -i) to the argv-provided output
+// (the final argument) rather than actually transcoding anything.
+const ffmpegStubScript = `#!/bin/sh
+input=""
+prev=""
+output=""
+for arg in "$@"; do
+  if [ "$prev" = "-i" ]; then input="$arg"; fi
+  prev="$arg"
+  output="$arg"
+done
+cp "$input" "$output"
+`;
+
 t.before(async () => {
   root = await mkdtemp(join(tmpdir(), "rec-live-tronic-server-"));
   const streamlink = join(root, "streamlink");
   await writeFile(streamlink, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   await chmod(streamlink, 0o755);
+  const ffmpeg = join(root, "ffmpeg");
+  await writeFile(ffmpeg, ffmpegStubScript, { mode: 0o755 });
+  await chmod(ffmpeg, 0o755);
   config = loadConfig({
     REC_LIVE_HOST: "127.0.0.1",
     REC_LIVE_PORT: "0",
@@ -23,6 +42,7 @@ t.before(async () => {
     REC_LIVE_RECORDINGS_DIR: join(root, "recordings"),
     REC_LIVE_PRIVATE_SOCKET: join(root, "run", "api.sock"),
     REC_LIVE_STREAMLINK_BIN: streamlink,
+    REC_LIVE_FFMPEG_BIN: ffmpeg,
     REC_LIVE_OEMBED_ENDPOINT: "http://127.0.0.1:1/oembed",
   });
   running = await startServer(config, "24.0.0");
@@ -1277,4 +1297,183 @@ t.test("reports is_recording true only while a recording is active", async (t) =
     await flagServer.close();
     await rm(flagRoot, { recursive: true, force: true });
   }
+});
+
+// -- Phase 5: the Cut workflow (trim & split) --------------------------------
+
+async function createFinishedRecording(base: string, title: string): Promise<string> {
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=cut-workflow",
+      title,
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  if (created.status !== 201) throw new Error(`Failed to create fixture recording: ${created.status}`);
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { version: number } };
+  await writeFile(join(root, "recordings", `${id}.ts`), `source content for ${id}`);
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recording.recording.version,
+    status: "recorded",
+  });
+  return id;
+}
+
+t.test("creates a trim cut draft with one preview piece from a finished recording", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "trim draft test");
+  const response = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "trim", start: "5:00", end: "10:00" }),
+  });
+  t.equal(response.status, 200);
+  const body = await response.json() as { draft: { id: string; mode: string; status: string; pieces: { index: number; start: string; end: string; duration: string; file_url: string }[] } };
+  t.equal(body.draft.mode, "trim");
+  t.equal(body.draft.status, "previewing");
+  t.equal(body.draft.pieces.length, 1);
+  t.match(body.draft.pieces[0], { index: 0, start: "0:05:00", end: "0:10:00", duration: "0:05:00" });
+  const { existsSync } = await import("node:fs");
+  t.ok(existsSync(join(root, "recordings", id, "piece-0.ts")));
+  t.equal(existsSync(join(root, "recordings", `${id}.ts`)), true);
+});
+
+t.test("creates a split cut draft with N+1 preview pieces", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "split draft test");
+  const response = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "split", cuts: ["20:00", "40:00"] }),
+  });
+  t.equal(response.status, 200);
+  const body = await response.json() as { draft: { mode: string; pieces: { index: number }[] } };
+  t.equal(body.draft.mode, "split");
+  t.equal(body.draft.pieces.length, 3);
+  const { existsSync } = await import("node:fs");
+  for (let index = 0; index < 3; index += 1) {
+    t.ok(existsSync(join(root, "recordings", id, `piece-${index}.ts`)));
+  }
+});
+
+t.test("rejects a cut of a source that is not recorded (409)", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=cut-not-recorded",
+      title: "not recorded cut test",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string } };
+  const response = await fetch(`${base}/recordings/${createdBody.recording.id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "trim", start: "0:05" }),
+  });
+  t.equal(response.status, 409);
+});
+
+t.test("404s a cut of a source that does not exist", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const response = await fetch(`${base}/recordings/rec-nonexistent/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "trim", start: "0:05" }),
+  });
+  t.equal(response.status, 404);
+});
+
+t.test("rejects out-of-order or out-of-range offsets (400)", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "malformed offsets test");
+  const outOfRange = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "trim", start: "2:00:00" }),
+  });
+  t.equal(outOfRange.status, 400);
+  const outOfOrder = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "split", cuts: ["40:00", "20:00"] }),
+  });
+  t.equal(outOfOrder.status, 400);
+  const malformed = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "trim", start: "not-a-time" }),
+  });
+  t.equal(malformed.status, 400);
+});
+
+t.test("regenerating a cut for a source reuses its single active draft (no second draft, no orphan folder)", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "regenerate draft test");
+  const first = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "trim", start: "5:00", end: "10:00" }),
+  });
+  const firstBody = await first.json() as { draft: { id: string; pieces: { index: number }[] } };
+  const second = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "split", cuts: ["10:00", "20:00"] }),
+  });
+  const secondBody = await second.json() as { draft: { id: string; mode: string; pieces: { index: number }[] } };
+  t.equal(secondBody.draft.id, firstBody.draft.id);
+  t.equal(secondBody.draft.mode, "split");
+  t.equal(secondBody.draft.pieces.length, 3);
+  const { existsSync, readdirSync } = await import("node:fs");
+  t.equal(existsSync(join(root, "recordings", id, "piece-0.ts")), true);
+  t.same(readdirSync(join(root, "recordings", id)).sort(), ["piece-0.ts", "piece-1.ts", "piece-2.ts"]);
+});
+
+t.test("range-serves a preview piece for playback", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "piece file route test");
+  const response = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "trim", start: "5:00", end: "10:00" }),
+  });
+  const body = await response.json() as { draft: { id: string; pieces: { file_url: string }[] } };
+  const pieceResponse = await fetch(`${base}${body.draft.pieces[0]!.file_url}`);
+  t.equal(pieceResponse.status, 200);
+  t.equal(pieceResponse.headers.get("Content-Type"), "video/mp2t");
+  t.equal(await pieceResponse.text(), `source content for ${id}`);
+  const missingPiece = await fetch(`${base}/recordings/${id}/cut/${body.draft.id}/pieces/99/file`);
+  t.equal(missingPiece.status, 404);
+  const missingDraft = await fetch(`${base}/recordings/${id}/cut/cut-nonexistent/pieces/0/file`);
+  t.equal(missingDraft.status, 404);
 });

@@ -11,6 +11,7 @@ export interface Config {
   recordingsDir: string;
   privateSocketPath: string;
   streamlinkBin: string;
+  ffmpegBin: string;
   oembedEndpoint: string;
   reconcileIntervalSeconds: number;
   runtimeSafetySeconds: number;
@@ -69,6 +70,7 @@ export function loadConfig(env: Environment = process.env): Config {
     recordingsDir: requiredAbsolutePath(env.REC_LIVE_RECORDINGS_DIR ?? "/srv/rec-live-tronic/recordings", "REC_LIVE_RECORDINGS_DIR"),
     privateSocketPath: requiredAbsolutePath(env.REC_LIVE_PRIVATE_SOCKET ?? "/run/rec-live-tronic/api.sock", "REC_LIVE_PRIVATE_SOCKET"),
     streamlinkBin: requiredAbsolutePath(env.REC_LIVE_STREAMLINK_BIN ?? "/usr/local/bin/streamlink", "REC_LIVE_STREAMLINK_BIN"),
+    ffmpegBin: requiredAbsolutePath(env.REC_LIVE_FFMPEG_BIN ?? "/usr/bin/ffmpeg", "REC_LIVE_FFMPEG_BIN"),
     oembedEndpoint: env.REC_LIVE_OEMBED_ENDPOINT ?? "https://www.youtube.com/oembed",
     reconcileIntervalSeconds: positiveInteger(env.REC_LIVE_RECONCILE_INTERVAL_SECONDS, 10, "REC_LIVE_RECONCILE_INTERVAL_SECONDS"),
     runtimeSafetySeconds: positiveInteger(env.REC_LIVE_RUNTIME_SAFETY_SECONDS, 120, "REC_LIVE_RUNTIME_SAFETY_SECONDS"),

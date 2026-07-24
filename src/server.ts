@@ -10,6 +10,7 @@ import { assertSupportedNodeVersion, loadConfig, type Config } from "./config.js
 import { openDatabase } from "./db/connection.js";
 import { migrateDatabase } from "./db/migrate.js";
 import { RecordingRepository } from "./recordings/repository.js";
+import { CutDraftRepository } from "./recordings/cut-draft-repository.js";
 import { UserSystemdClient } from "./systemd/client.js";
 
 export interface RunningServer {
@@ -63,7 +64,7 @@ export async function startServer(config: Config = loadConfig(), nodeVersion = p
     return { process: "ok", sqlite, recordings, dependencies };
   };
 
-  const recorder = new RecorderService(new RecordingRepository(database), new CookieRepository(database), config, new UserSystemdClient());
+  const recorder = new RecorderService(new RecordingRepository(database), new CookieRepository(database), config, new UserSystemdClient(), new CutDraftRepository(database));
   const publicServer = createServer(createApp({ health, recorder, config }));
   const privateServer = createServer(createApp({ health, recorder, privateApi: true }));
   try {
