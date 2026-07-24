@@ -55,6 +55,7 @@ const router = useRouter();
 
 const recordings = ref<Recording[]>([]);
 const deleteMode = ref(false);
+const deletingIds = ref<Set<string>>(new Set());
 
 onMounted(async () => {
   try {
@@ -70,6 +71,8 @@ function selectRecording(id: string): void {
 }
 
 async function handleDelete(id: string): Promise<void> {
+  if (deletingIds.value.has(id)) return;
+  deletingIds.value.add(id);
   try {
     await api.deleteRecordingFile(id);
     recordings.value = recordings.value.filter((rec) => rec.id !== id);
@@ -77,6 +80,8 @@ async function handleDelete(id: string): Promise<void> {
   } catch (error) {
     console.error("Failed to delete recording:", error);
     toast(error instanceof Error ? error.message : "Failed to delete recording");
+  } finally {
+    deletingIds.value.delete(id);
   }
 }
 </script>

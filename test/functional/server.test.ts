@@ -1636,6 +1636,56 @@ t.test("leaves the source row and its .ts untouched after cut and after keep", a
   t.equal(readFileSync(join(root, "recordings", `${id}.ts`), "utf8"), `source content for ${id}`);
 });
 
+t.test("rejects an invalid title override without orphaning renamed piece files", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "keep bad title override source");
+  const draft = await createSplitDraft(base, id, ["20:00", "40:00"]);
+  const response = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ keep: [0, 1], titles: { "0": "   " } }),
+  });
+  t.equal(response.status, 400);
+  const { existsSync } = await import("node:fs");
+  // Every kept piece file must still be present under its original name --
+  // a validation failure must not have renamed any of them out from under
+  // the still-previewing draft.
+  t.equal(existsSync(join(root, "recordings", id, "piece-0.ts")), true);
+  t.equal(existsSync(join(root, "recordings", id, "piece-1.ts")), true);
+  const stillPreviewing = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ keep: [0, 1] }),
+  });
+  t.equal(stillPreviewing.status, 200);
+});
+
+t.test("rejects cutting a trashed recording", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "trashed source cut test");
+  const draft = await createTrimDraft(base, id, "5:00", "10:00");
+  const trashResponse = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  t.equal(trashResponse.status, 204);
+
+  const cutAfterTrash = await fetch(`${base}/recordings/${id}/cut`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ mode: "trim", start: "0:01" }),
+  });
+  t.equal(cutAfterTrash.status, 409);
+
+  const keepAfterTrash = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  t.equal(keepAfterTrash.status, 409);
+});
+
 t.test("keep 404s when the draft or source is missing, and 409s when not previewing", async (t) => {
   const address = running.publicServer.address();
   if (!address || typeof address === "string") return t.fail("no public listener");

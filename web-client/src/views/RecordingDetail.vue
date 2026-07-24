@@ -22,7 +22,7 @@
                 controls
                 class="video-player"
               ></video>
-              <video v-else :src="streamUrl" controls class="video-player"></video>
+              <video v-else ref="videoEl" :src="streamUrl" controls class="video-player"></video>
             </div>
           </div>
         </div>
@@ -146,6 +146,9 @@ interface Recording {
   title: string;
   status: string;
   stage: string | null;
+  artist: string | null;
+  venue: string | null;
+  event: string | null;
   quality: string;
   startAt: string;
   stopAt: string;
@@ -279,19 +282,23 @@ watch(
     derivedRecordings.value = [];
     if (typeof id !== "string") return;
     try {
-      recording.value = await api.getRecording(id);
+      const loaded = await api.getRecording(id);
+      if (route.params.id !== id) return;
+      recording.value = loaded;
       document.title = `${recording.value.title} - RecTronic`;
       if (recording.value.status === "recorded") {
         await nextTick();
+        if (route.params.id !== id) return;
         setupPlayer();
       }
       if (recording.value.cutFromId) {
-        api.getRecording(recording.value.cutFromId)
-          .then((source) => { sourceRecording.value = source; })
+        const cutFromId = recording.value.cutFromId;
+        api.getRecording(cutFromId)
+          .then((source) => { if (route.params.id === id) sourceRecording.value = source; })
           .catch((error) => console.error("Failed to load source recording:", error));
       } else {
         api.listCutFrom(id)
-          .then((cuts) => { derivedRecordings.value = cuts; })
+          .then((cuts) => { if (route.params.id === id) derivedRecordings.value = cuts; })
           .catch((error) => console.error("Failed to load derived recordings:", error));
       }
     } catch (error) {

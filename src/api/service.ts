@@ -175,11 +175,13 @@ export class RecorderService {
     const venue = optionalText(input.venue, "venue");
     const event = optionalText(input.event, "event");
     const explicitStageInput = optionalText(input.stage, "stage");
-    const explicitTitle = typeof input.title === "string" && input.title.trim() ? input.title.trim() : null;
-    const title = explicitTitle ?? [artist, venue, event, explicitStageInput].filter((segment): segment is string => segment !== null && segment !== "").join(" - ");
+    const explicitTitle = input.title === undefined || input.title === null ? null : text(input.title, "title");
+    const composedTitle = [artist, venue, event, explicitStageInput].filter((segment): segment is string => segment !== null && segment !== "").join(" - ");
+    const title = explicitTitle ?? composedTitle;
     if (!title) throw new AppError("VALIDATION_ERROR", 400, "title must be a non-empty string");
+    const cappedTitle = title.length > 500 ? title.slice(0, 500) : title;
     const stage = explicitStageInput ?? stageFromTitle(title) ?? (await fetchOembedMetadata(this.config.oembedEndpoint, url)).authorName;
-    return mapRecording(this.recordings.create({ id, url, title, stage, artist, venue, event, cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
+    return mapRecording(this.recordings.create({ id, url, title: cappedTitle, stage, artist, venue, event, cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
   }
 
   listRecordings(status?: unknown, filters?: { trashed?: boolean; cutFromId?: string }): ReturnType<typeof mapRecording>[] {
@@ -210,18 +212,43 @@ export class RecorderService {
     const source = this.recordings.getById(sourceId);
     if (!source) throw new AppError("NOT_FOUND", 404, "Recording not found");
     if (source.status !== "recorded") throw new AppError("STATUS_CONFLICT", 409, "Only finished recordings can be cut");
+    if (source.trashedAt !== null) throw new AppError("STATUS_CONFLICT", 409, "Cannot cut a trashed recording");
     const durationSeconds = (toUnixMilliseconds(source.stopAt, "stopAt") - toUnixMilliseconds(source.startAt, "startAt")) / 1000;
     const parsed = parseCutRequest(input, durationSeconds);
 
     const workingDir = join(this.config.recordingsDir, sourceId);
     await mkdir(workingDir, { recursive: true, mode: 0o770 });
+    const existing = this.cutDrafts.getActiveBySource(sourceId);
+
+    // Extract every segment to a .tmp path first. Only once ALL segments have
+    // extracted successfully do we rename them into their final piece-N.ts
+    // names and update the draft row -- a failure partway through (ffmpeg
+    // error, seek timeout) must leave any existing previewing draft and its
+    // old piece files completely untouched, not a mix of new/partial/old.
+    const tmpPaths: string[] = [];
+    try {
+      for (let index = 0; index < parsed.segments.length; index += 1) {
+        const segment = parsed.segments[index]!;
+        const tmpPath = join(workingDir, `piece-${index}.ts.tmp`);
+        tmpPaths.push(tmpPath);
+        await extractSegment(this.config.ffmpegBin, source.tsPath, segment, tmpPath);
+      }
+    } catch (error) {
+      await Promise.all(tmpPaths.map((tmpPath) => rm(tmpPath, { force: true }).catch(() => undefined)));
+      throw error;
+    }
     for (let index = 0; index < parsed.segments.length; index += 1) {
-      const segment = parsed.segments[index]!;
-      const outputPath = join(workingDir, `piece-${index}.ts`);
-      await extractSegment(this.config.ffmpegBin, source.tsPath, segment, outputPath);
+      await rename(join(workingDir, `piece-${index}.ts.tmp`), join(workingDir, `piece-${index}.ts`));
+    }
+    // A piece-count-reducing Adjust can leave stale higher-index piece files
+    // from the previous, larger set -- remove them now that the new set is
+    // fully in place.
+    if (existing && existing.pieceCount > parsed.segments.length) {
+      for (let index = parsed.segments.length; index < existing.pieceCount; index += 1) {
+        await rm(join(workingDir, `piece-${index}.ts`), { force: true }).catch(() => undefined);
+      }
     }
 
-    const existing = this.cutDrafts.getActiveBySource(sourceId);
     const draft = this.cutDrafts.upsertPreviewing({
       id: existing?.id ?? cutDraftId(),
       sourceId,
@@ -265,6 +292,7 @@ export class RecorderService {
   async keepCutDraft(sourceId: string, draftId: string, input: unknown): Promise<{ recordings: ReturnType<typeof mapRecording>[] }> {
     const source = this.recordings.getById(sourceId);
     if (!source) throw new AppError("NOT_FOUND", 404, "Recording not found");
+    if (source.trashedAt !== null) throw new AppError("STATUS_CONFLICT", 409, "Cannot cut a trashed recording");
     const draft = this.cutDrafts.getById(draftId);
     if (!draft || draft.sourceId !== sourceId) throw new AppError("NOT_FOUND", 404, "Cut draft not found");
     if (draft.status !== "previewing") throw new AppError("STATUS_CONFLICT", 409, "Cut draft is not previewing");
@@ -300,17 +328,28 @@ export class RecorderService {
     }
 
     const sourceStartMs = toUnixMilliseconds(source.startAt, "startAt");
-    const derived: Recording[] = [];
-    for (const index of keepIndices) {
+
+    // First pass: validate everything and compute every value that could
+    // throw (title override, RFC3339 conversion) before any file is touched,
+    // so a 400 here has zero side effects on disk.
+    const toPromote = keepIndices.map((index) => {
       const segment = parsed.segments[index]!;
-      const newId = recordingId();
-      const piecePath = join(draft.workingDir, `piece-${index}.ts`);
-      const destPath = join(this.config.recordingsDir, `${newId}.ts`);
-      await rename(piecePath, destPath);
       const titleOverride = titles[String(index)];
       const title = titleOverride !== undefined
         ? text(titleOverride, `titles[${index}]`)
         : draft.mode === "trim" ? `${source.title} (cut)` : `${source.title} (part ${index + 1})`;
+      const startAt = toRfc3339(Math.round(sourceStartMs + segment.start * 1000));
+      const stopAt = toRfc3339(Math.round(sourceStartMs + segment.end * 1000));
+      return { index, newId: recordingId(), title, startAt, stopAt };
+    });
+
+    // Second pass: everything is known-valid, so it's now safe to rename
+    // piece files and create their recording rows.
+    const derived: Recording[] = [];
+    for (const { index, newId, title, startAt, stopAt } of toPromote) {
+      const piecePath = join(draft.workingDir, `piece-${index}.ts`);
+      const destPath = join(this.config.recordingsDir, `${newId}.ts`);
+      await rename(piecePath, destPath);
       const created = this.recordings.create({
         id: newId,
         url: source.url,
@@ -321,8 +360,8 @@ export class RecorderService {
         event: source.event,
         cookieId: null,
         quality: source.quality,
-        startAt: toRfc3339(sourceStartMs + segment.start * 1000),
-        stopAt: toRfc3339(sourceStartMs + segment.end * 1000),
+        startAt,
+        stopAt,
         status: "recorded",
         unitName: `${newId}.service`,
         tsPath: destPath,

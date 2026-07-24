@@ -24,8 +24,14 @@ export function parseCutRequest(input: unknown, durationSeconds: number): Parsed
 
   if (body.mode === "trim") {
     const start = offset(body.start, "start");
-    const endRaw = body.end ?? body.duration;
-    const end = endRaw === undefined ? durationSeconds : offset(endRaw, "end");
+    let end: number;
+    if (body.end !== undefined) {
+      end = offset(body.end, "end");
+    } else if (body.duration !== undefined) {
+      end = start + offset(body.duration, "duration");
+    } else {
+      end = durationSeconds;
+    }
     if (start < 0 || start >= durationSeconds) throw new AppError("VALIDATION_ERROR", 400, "start is out of range");
     if (end <= start || end > durationSeconds) throw new AppError("VALIDATION_ERROR", 400, "end is out of range");
     return {

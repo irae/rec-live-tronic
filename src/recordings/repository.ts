@@ -241,7 +241,7 @@ export class RecordingRepository {
     return this.database.transaction((): MutationResult<Recording> => {
       const existing = this.getById(id);
       if (existing === undefined) return { outcome: "not_found" };
-      if (existing.status === "recording" && (patch.title !== undefined || patch.stage !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined)) {
+      if (existing.status === "recording" && (patch.title !== undefined || patch.stage !== undefined || patch.artist !== undefined || patch.venue !== undefined || patch.event !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined)) {
         return { outcome: "conflict" };
       }
       if (existing.status === "recorded" && (patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt !== undefined)) {

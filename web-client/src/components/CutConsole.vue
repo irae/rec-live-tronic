@@ -274,10 +274,14 @@ function setPieceEl(index: number, el: HTMLVideoElement | null): void {
 }
 
 function setupPiecePlayers(): void {
-  if (!useMpegts || !draft.value) return;
+  if (!draft.value) return;
   for (const piece of draft.value.pieces) {
     const el = pieceEls.get(piece.index);
     if (!el) continue;
+    if (!useMpegts) {
+      el.src = piece.file_url;
+      continue;
+    }
     const player = mpegts.createPlayer({ type: "mpegts", url: piece.file_url, isLive: false }, {});
     player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
       console.error("mpegts.js piece playback error:", piece.index, type, detail);
