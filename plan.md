@@ -918,6 +918,227 @@ t.test("rejects editing start/stop/quality on a finished recording", async (t) =
 t.test("clears stage when PATCHed with an empty stage on a finished recording", async (t) => {}) // 200; stage becomes null
 ```
 
+### Phase 4b — post-ship UX feedback batch
+
+**Not a new numbered phase — a batch of concrete UI/UX corrections on already-shipped
+Phase 4/4a work.** Kept deliberately minimal. Eight items grouped into four
+parallel implementation streams. New nullable metadata columns
+(`artist`/`venue`/`event`), a title-composition rule, a reusable toast system, a
+global "is anything recording" indicator, no-confirmation trash, and an Archive
+quick-delete mode. Phase 0 invariants untouched: the API stays the sole SQLite
+writer, the reconciler is uninvolved, no request data reaches a shell or becomes a
+path/unit identifier.
+
+**Parallel execution & sequencing.** Built as four git-worktree streams with
+maximum safe parallelism; minor merge conflicts are resolved by whichever stream
+lands last (owner-accepted). **Stream A (fields+form)** lands the migration and
+backend columns first so **Stream D (archived-recording Edit extension)** can build
+on the columns existing — D is explicitly sequenced *after* A. B and C are
+independent of A/D. Known file overlaps to expect (not blockers):
+
+- `web-client/src/App.vue` — Stream B (mount `<ToastHost>`) **and** Stream C
+  (blinking indicator + conditional disk figure + global poll).
+- `web-client/src/api.ts` — Stream A (new `Recording` fields, `createRecording`
+  payload) **and** Stream C (`isRecording` shared ref + poll helper).
+- `web-client/src/views/ScheduleView.vue` — Stream A (new form fields) **and**
+  Stream B (success toasts).
+- `web-client/src/views/RecordingDetail.vue` — Stream B (no-confirm delete + toast)
+  **and** Stream D (edit-panel fields). Different regions of the file.
+- `src/recordings/repository.ts` and `src/api/service.ts` — Stream A (columns +
+  compose), Stream C (recording-active check), Stream D (patch extension). A lands
+  the column plumbing first; C and D layer on top.
+
+---
+
+#### Stream A — new metadata fields + New-Recording form redesign (items 3, 4)
+
+**Migration `migrations/007-recording-metadata.sql`.** Adds three nullable columns
+`artist`, `venue`, `event` (all `TEXT`) to `recordings`; `stage` already exists
+(`003`). Number is `007`: `005`/`006` are reserved by Phase 5
+(`005-recording-cut-lineage.sql`, `006-cut-drafts.sql`) even though not yet on disk,
+so `007` keeps both plans collision-free regardless of build order.
+
+**Thread the three fields through** `src/recordings/repository.ts` exactly as `stage`
+is threaded: `selectColumns`, `RecordingRow`, the `Recording` interface,
+`mapRecording`, `CreateRecordingInput`, and `UpdateScheduledDetails`; existing rows
+default to null. Add them to the public `Recording` interface in
+`web-client/src/api.ts` too.
+
+**Title composition rule (`RecorderService.createRecording`, `src/api/service.ts`).**
+`RecordingInput` gains `artist?`, `venue?`, `event?`. Trim each (and `stage`) to a
+non-empty string or null. Then:
+
+- **Explicit title wins verbatim.** If `input.title` is a non-empty string, use it
+  unchanged (today's behaviour).
+- **Otherwise compose.** Build the segment array `[artist, venue, event, stage]`
+  (using the trimmed direct-input `stage` value), **filter out every null/empty/
+  whitespace-only segment**, then `.join(" - ")`. Example: artist+stage only →
+  `"Artist - Stage"` (no empty dashes). All four empty and no title → the composed
+  string is empty and the existing `text(input.title, "title")` guard still throws
+  `VALIDATION_ERROR` (the form prevents this).
+
+**Stage precedence (reconciles direct input vs. derivation).** Store `stage` as:
+`explicitStageInput ?? stageFromTitle(finalTitle) ?? (await fetchOembedMetadata(...)).authorName`.
+That is: **a directly-typed `stage` field wins and skips the oEmbed-derived
+fallback**; only when no `stage` field is given does the existing
+`stageFromTitle`/oEmbed derivation run, and it derives from the *final* (composed or
+verbatim) title. `stageFromTitle` still only matches the clean 3-part
+`"A - B - C"` convention, so a composed title lacking a stage segment simply falls
+through to oEmbed — correct and unchanged.
+
+**Form redesign — delegated to the frontend-design-skill agent (designs AND
+implements in one shot).** This plan fixes only *what must exist*, not the visual
+layout (per this repo's "guidance not implementation" convention):
+
+- Fields present: `url` (mandatory), `title` (optional, prefilled), `artist`,
+  `venue`, `event`, `stage` (all optional), plus existing `quality`, `duration`,
+  and (scheduled-mode) `start`/`stop`. The form sends `artist`/`venue`/`event`/
+  `stage` in the `POST /recordings` payload; empty fields are omitted or sent null.
+- The composition rule above is server-side — the form does **not** compose the
+  title itself; it may show a read-only preview but the backend is authoritative.
+- Tabbed/segmented field entry (owner's "a tab for selection"), **wider on
+  desktop**. **Mobile treatment is the design agent's call** (owner: "IDK about
+  mobile") — it must decide, not leave it unspecified.
+- `POST /recordings` is otherwise unchanged; `api.ts` `createRecording` is a
+  passthrough (`unknown` payload) and only needs the new optional fields documented.
+
+**API surface (curl-first).** `POST /recordings` gains optional `artist`, `venue`,
+`event` string fields (nullable; omitted → null). No new route, no new status.
+
+```sh
+curl -X POST http://127.0.0.1:8787/recordings \
+  -H 'content-type: application/json' \
+  -d '{"url":"https://www.youtube.com/watch?v=x","artist":"Artist","stage":"Main","start_at":"2026-08-01T20:00:00Z","stop_at":"2026-08-01T21:00:00Z"}'
+# -> title composed server-side as "Artist - Main"
+```
+
+**Functional tests** (server suite, names only):
+
+```ts
+// test/functional/server.test.ts (additional blocks)
+t.test("persists artist, venue, and event through create and GET");
+t.test("composes the title from artist/venue/event/stage when no title is given");
+t.test("omits empty segments (no doubled dashes) when composing a title");
+t.test("uses an explicit title verbatim instead of composing from segments");
+t.test("uses a directly-typed stage field over the oembed-derived stage");
+```
+
+#### Stream B — toast system + no-confirm trash + Archive quick-delete (items 6, 7, 8)
+
+**Toast system (item 7) — one shared composable + one host.**
+
+- Create `web-client/src/composables/useToast.ts`: exports `useToast()` returning
+  `{ toast(message: string) }` and a module-level reactive `toasts` array. Each
+  toast auto-dismisses after **10 s**; multiple in quick succession **stack**.
+- Create `web-client/src/components/ToastHost.vue`: renders the `toasts` stack,
+  mounted **once** in `App.vue` (outside `<router-view>`). Position: **bottom-center
+  on desktop, top on mobile** (center/full-width is the implementer's call). Sizing:
+  small/thin on desktop; may crowd more on mobile (owner: "ok to kinda crowd
+  mobile"). Self-contained styling using the existing CSS variables.
+- Wire `toast(...)` into these existing success actions (not just the new ones):
+  schedule **created** and **now-mode created** (`ScheduleView.handleAddRecording`/
+  `handleAddRecordingNow`), **extended** (`saveExtend`), **edited** (`saveEdit` in
+  both `ScheduleView` and `RecordingDetail`), **start-now** (`handleStartNow`),
+  **stop-early** (`handleStopEarly`), **cancelled** (`handleCancel`), **restored**
+  and **permanently deleted** (`TrashView`), plus the two new delete paths below.
+
+**No-confirmation trash (item 6) — `RecordingDetail.vue`.** Remove the
+`ConfirmDialog` step from the reversible move-to-trash flow: delete
+`showDeleteConfirm`, the `<ConfirmDialog>` instance, and the `askDelete`→
+`confirmDelete` two-step; the Delete button now calls `api.deleteRecordingFile(id)`
+directly, fires a toast ("Moved to Trash"), and navigates to archive. The already-
+shipped shy-button styling (commit `8d594ae`) stays; only the confirm step goes.
+**This supersedes the Phase 4a task's "do not touch the confirm dialog"
+constraint** — removing that confirm step is now in-scope. `TrashView.vue`'s
+**permanent-delete keeps its `ConfirmDialog`** (irreversible). No backend change.
+
+**Archive quick-delete toggle (item 8) — `ArchiveView.vue` + `RecordingList.vue`.**
+A toggle button in the Archive header/toolbar enters a "deletion mode". Extend
+`RecordingList.vue` with an optional `deleteMode` boolean prop and a `delete`
+emit; while active each row shows a trash affordance (mono trash button, `--fluoro`
+on hover — mirror `TrashView.vue`'s `.tbtn--stop` per-row treatment). One click
+calls `api.deleteRecordingFile(id)` immediately (no confirm, per item 6), removes
+the row locally, and fires a toast. Reuses the existing `DELETE /recordings/:id/file`
+(move-to-trash) route — no backend change. Frontend-only stream; no functional
+tests (curl parity already covered by Phase 3's trash tests).
+
+#### Stream C — global recording indicator + conditional disk figure (items 1, 2)
+
+**Backend signal (`src/app.ts`, `GET /recordings`).** Add an `is_recording` boolean
+to the top-level list response alongside the existing `disk` object, computed as
+`recorder.listRecordings("recording").length > 0`. Single source of truth for both
+items — a page like Archive that only fetches `?status=recorded` cannot derive this
+from its own rows, so the server must report it. Every `GET /recordings` variant
+(default, `?status=`, `?trashed=`) carries it.
+
+**Shared client state (`web-client/src/api.ts`).** Add `export const isRecording =
+ref(false)`, populated inside `fetchList` from `data.is_recording` exactly as
+`diskSpace` already is. Add a lightweight poll helper the header uses.
+
+**Global poll lifted into `App.vue` (item 2 decision).** The header must reflect
+recording state on **every** page, including Archive and RecordingDetail which do
+not poll today. Mirror the existing `diskSpace`-as-shared-side-effect pattern: in
+`App.vue`, `onMounted` + `setInterval(60_000)` (cleared `onUnmounted`) calls
+`api.listRecordings("recording")`, whose response side-effect populates both
+`diskSpace` and `isRecording`. The `?status=recording` list is tiny and its rows
+are unused — only the shared refs matter. Existing per-view polls
+(`ScheduleView`, `TrashView`) stay as-is for their own list rendering; the header no
+longer depends on them.
+
+**UI (`App.vue` header).**
+
+- **Blinking indicator (item 2):** a red circle (`--fluoro`) that blinks slowly
+  (a ~1.6s CSS `@keyframes` pulse) rendered only when `isRecording` is true.
+- **Conditional disk figure (item 1):** the existing "after captures"
+  (`projectedBytes`) span renders **only when `isRecording` is true**; the "actual
+  free" span keeps rendering unconditionally.
+
+**Functional test** (server suite, name only):
+
+```ts
+// test/functional/server.test.ts (additional block)
+t.test("reports is_recording true only while a recording is active");
+```
+
+#### Stream D — archived-recording Edit extension (item 5) — SEQUENCED AFTER Stream A
+
+Builds on the Phase 4a Edit flow (commits `43f1375` backend, `8d594ae` frontend) and
+requires Stream A's `artist`/`venue`/`event` columns to exist first.
+
+**Backend (`src/api/service.ts`, `src/recordings/repository.ts`).** Extend the
+existing `recorded`-status patch branch — today it allows only `title`/`stage` and
+409s `quality`/`url`/`cookie_id`/`start_at`/`stop_at`. Add `artist`/`venue`/`event`
+to the allowed set: `RecordingPatch` gains the three (each: non-empty string, or
+empty/`null` clears to null, via `text(_, name, 200)` — same shape as `stage` at
+`service.ts:175`); the `recorded` branch (`service.ts:185`) keeps rejecting
+`quality`/`start_at`/`stop_at`. In `repository.ts`, `UpdateScheduledDetails` gains
+the three fields with `artist = ?`/`venue = ?`/`event = ?` in the field-builder, and
+the in-transaction `recorded` guard (`repository.ts:206`) is relaxed to permit them
+alongside title/stage, keeping the optimistic `version`/`status` `WHERE` clause.
+
+**Recompose-on-edit semantics (decision).** **Title is an independent field once the
+recording exists — editing `artist`/`venue`/`event`/`stage` does NOT re-compose the
+title.** Rationale: the schema stores no "was auto-composed" flag and adding one is
+unwarranted (YAGNI); the user edits `title` directly in the same panel; silent
+recomposition would clobber an intentionally-set title. So creation-time composition
+(Stream A) is a one-time convenience when no title exists yet; post-creation the
+title is authoritative and edited on its own. The PATCH writes exactly the fields
+sent, never recomputing title.
+
+**Frontend (`RecordingDetail.vue`).** Extend the existing inline "Edit details" panel
+(currently Title + Stage) with `artist`, `venue`, `event` inputs; `saveEdit` sends
+all five via `api.patchRecording(id, { title, stage, artist, venue, event })`.
+Same panel, more fields — no new component.
+
+**Functional tests** (server suite, names only):
+
+```ts
+// test/functional/server.test.ts (additional blocks)
+t.test("edits artist, venue, and event on a finished recording via PATCH");
+t.test("leaves the title unchanged when editing metadata fields on a finished recording");
+t.test("still rejects editing start/stop/quality on a finished recording");
+```
+
 ### Phase 5 — the Cut workflow (trim & split)
 
 **Complexity: Medium.** Non-destructive **Cut** operations over already-finished
