@@ -1,9 +1,9 @@
 [Unit]
-Description=Run rec-live-tronic reconciliation every 30 seconds
+Description=Run rec-live-tronic reconciliation every 10 seconds
 
 [Timer]
-OnBootSec=30s
-OnUnitActiveSec=30s
+OnBootSec=10s
+OnUnitActiveSec=10s
 AccuracySec=1s
 Persistent=true
 Unit=rec-live-tronic-reconciler.service
