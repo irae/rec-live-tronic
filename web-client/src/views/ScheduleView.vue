@@ -249,28 +249,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted, onUnmounted, computed } from "vue";
-import { api } from "../api";
+import { ref, reactive, watch, onMounted, computed } from "vue";
+import { api, recordings, type Recording } from "../api";
 import { useToast } from "../composables/useToast";
 
 const { toast } = useToast();
 
-interface Recording {
-  id: string;
-  title: string;
-  status: string;
-  url: string;
-  quality: string;
-  startAt: string;
-  stopAt: string;
-  stage: string | null;
-  cookieId: string | null;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
-const recordings = ref<Recording[]>([]);
 const error = ref<string | null>(null);
 const editingId = ref<string | null>(null);
 const extendingId = ref<string | null>(null);
@@ -398,11 +382,14 @@ const editingRecording = computed(() => {
   return recordings.value.find((rec) => rec.id === editingId.value);
 });
 
+// One-off initial fetch so this view isn't blank before App.vue's own global
+// poll (the sole recurring poll left) has populated the shared `recordings`
+// ref -- both write into the same shared ref, so this never drifts out of
+// phase with it.
 async function fetchRecordings(): Promise<void> {
   try {
     error.value = null;
     const all = await api.listRecordings();
-    recordings.value = all;
     for (const id of stoppingIds.value) {
       const rec = all.find((r) => r.id === id);
       if (!rec || rec.status !== "recording") {
@@ -416,15 +403,8 @@ async function fetchRecordings(): Promise<void> {
   }
 }
 
-let pollInterval: ReturnType<typeof setInterval> | undefined;
-
 onMounted(() => {
   fetchRecordings();
-  pollInterval = setInterval(fetchRecordings, 60_000);
-});
-
-onUnmounted(() => {
-  if (pollInterval) clearInterval(pollInterval);
 });
 
 // Builds the optional title/artist/venue/event/stage fields for the create

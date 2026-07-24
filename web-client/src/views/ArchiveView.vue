@@ -27,40 +27,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from "vue";
+import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { api } from "../api";
+import { api, recordings as sharedRecordings } from "../api";
 import RecordingList from "../components/RecordingList.vue";
 import { useToast } from "../composables/useToast";
 
 const { toast } = useToast();
 
-interface Recording {
-  id: string;
-  title: string;
-  stage: string | null;
-  quality: string;
-  startAt: string;
-  stopAt: string;
-  status: string;
-  url: string;
-  cookieId: string | null;
-  cutFromId: string | null;
-  version: number;
-  createdAt: string;
-  updatedAt: string;
-}
-
 const router = useRouter();
 
-const recordings = ref<Recording[]>([]);
+// Derived from the shared, App.vue-polled recordings list, so this view
+// never goes stale even when it's left mounted without a poll of its own.
+const recordings = computed(() => sharedRecordings.value.filter((rec) => rec.status === "recorded"));
 const deleteMode = ref(false);
 const deletingIds = ref<Set<string>>(new Set());
 
 onMounted(async () => {
+  if (sharedRecordings.value.length > 0) return;
   try {
-    const all = await api.listRecordings("recorded");
-    recordings.value = all;
+    await api.listRecordings();
   } catch (error) {
     console.error("Failed to load archive:", error);
   }
@@ -75,7 +61,7 @@ async function handleDelete(id: string): Promise<void> {
   deletingIds.value.add(id);
   try {
     await api.deleteRecordingFile(id);
-    recordings.value = recordings.value.filter((rec) => rec.id !== id);
+    sharedRecordings.value = sharedRecordings.value.filter((rec) => rec.id !== id);
     toast("Moved to Trash");
   } catch (error) {
     console.error("Failed to delete recording:", error);

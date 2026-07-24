@@ -54,6 +54,12 @@ export const diskSpace = ref<DiskSpace | null>(null);
 // call, so App.vue's global poll keeps it current on every page.
 export const isRecording = ref(false);
 
+// Shared full (unfiltered, non-trashed) recordings list, kept current by
+// App.vue's single global poll. Views that need "everything except trash"
+// (Schedule, Archive) read/filter/mutate this instead of running their own
+// poll, so they never drift out of phase with the header or each other.
+export const recordings = ref<Recording[]>([]);
+
 class ApiClient {
   private async fetchList(url: string, errorMessage: string): Promise<Recording[]> {
     const response = await fetch(url);
@@ -77,7 +83,11 @@ class ApiClient {
 
   async listRecordings(status?: string): Promise<Recording[]> {
     const url = status ? `/recordings?status=${encodeURIComponent(status)}` : "/recordings";
-    return this.fetchList(url, "Failed to list recordings");
+    const result = await this.fetchList(url, "Failed to list recordings");
+    if (!status) {
+      recordings.value = result;
+    }
+    return result;
   }
 
   async listTrashedRecordings(): Promise<Recording[]> {

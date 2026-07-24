@@ -46,15 +46,16 @@ function formatBytes(bytes: number): string {
   return `${mb.toFixed(0)} MB`;
 }
 
-// Global poll so the header's recording indicator and disk figures stay
-// current on every page, including ones (Archive, RecordingDetail) that do
-// not otherwise poll /recordings themselves.
+// Single global poll: fetches the full recordings list, which populates the
+// shared diskSpace/isRecording/recordings refs in api.ts as a side effect.
+// This is the one source of truth every view (header, Schedule, Archive)
+// reads from, so they never drift out of phase with each other.
 let pollTimer: ReturnType<typeof setInterval> | undefined;
 
 onMounted(() => {
-  api.listRecordings("recording").catch(() => {});
+  api.listRecordings().catch(() => {});
   pollTimer = setInterval(() => {
-    api.listRecordings("recording").catch(() => {});
+    api.listRecordings().catch(() => {});
   }, 60_000);
 });
 
