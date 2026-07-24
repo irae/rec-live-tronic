@@ -843,6 +843,81 @@ t.test("rejects a formats probe for a non-youtube url");
       dropdown of the rest); a failed/non-live probe falls back to the static
       pills without blocking the form. Scheduled mode keeps the static pills.
 
+### Phase 4a — edit finished recording (title/stage) + detail action layout — done
+
+**Complexity: Small.** A finished (`recorded`) recording had no editable fields
+and `RecordingDetail.vue`'s action area led with a loud dashed-red delete card.
+Two changes: make **title** and **stage** editable post-capture, and re-weight the
+detail actions so **Edit** is the primary affordance and **Delete** a quiet
+escape hatch.
+
+**Editable field scope (and deliberate exclusions).** On a `recorded` recording
+only `title` and `stage` are mutable — both are free-text labels with no bearing
+on what was captured, matching what's already editable pre-capture. Everything
+else in the patch stays rejected for this status:
+
+- `quality`, `url`, `cookie_id` — meaningless after capture; they described how/
+  where to fetch, not the finished artifact.
+- `start_at`, `stop_at` — these are the *actual captured window*. Editing them
+  post-hoc would misrepresent what the file contains (a correctness concern, not
+  just scope), so they are excluded on purpose.
+
+There is no `muxed` status in the code (`recordingStatuses` in
+`src/recordings/repository.ts` is `scheduled | recording | recorded | cancelled |
+failed | missed`), so `recorded` is the only terminal status to allow.
+
+**Mechanism — reuse the existing `PATCH /recordings/:id`.** No new route. The
+edit reuses `app.ts`'s `app.patch("/recordings/:id")` → `RecorderService.patchRecording`
+→ `RecordingRepository.updateScheduledDetails`, extended to allow `recorded`:
+
+- `src/api/service.ts`: `RecordingPatch` gains `stage?`. `patchRecording` builds
+  `patch.stage` (non-empty string via `text(_, "stage", 200)`; an empty string or
+  explicit `null` clears it to `null`, since `stage` is nullable in the schema).
+  A new status branch: `existing.status === "recorded"` throws `STATUS_CONFLICT`
+  409 if the patch carries any of `quality`/`startAt`/`stopAt` (only `title`/`stage`
+  pass). The `recorded` path returns before any systemd interaction.
+- `src/recordings/repository.ts`: `UpdateScheduledDetails` gains `stage?: string |
+  null`; the field-builder writes `stage = ?`; the in-transaction status guard is
+  relaxed to also permit `recorded` when the patch is title/stage-only (rejecting
+  `quality`/`startAt`/`stopAt` for that status), keeping the optimistic
+  `version`/`status` `WHERE` clause intact.
+
+**Detail action layout — Edit prominent, Delete shy** (`RecordingDetail.vue`,
+`recorded` only):
+
+- **Edit** is the new primary action: solid violet fill (`.btn--edit`), full
+  width, placed first, above Download. Clicking it swaps the button stack for an
+  inline edit panel (Title + Stage inputs, Save/Cancel), modeled on
+  `ScheduleView.vue`'s inline `startEdit`/`saveEdit`/`cancelEdit` row. Save calls
+  `api.patchRecording(id, { title, stage })`, updates `recording.value` and
+  `document.title`, and exits edit mode; failures surface inline.
+- **Download** stays a violet *outline* button (`.btn--download`), now visually
+  secondary to Edit.
+- **Delete** loses the dashed-hatched `.danger` card and its paragraph. It
+  becomes a small, muted `.btn--trash` (mono, thin border, `--ink-soft`; hover
+  reveals `--fluoro` danger) with a one-line quiet caption (`Moves to Trash ·
+  restorable for 30 days`) and a `title` tooltip carrying the full explanation.
+  The `ConfirmDialog` trigger and copy are unchanged — only the resting-state
+  weight of the trigger changes.
+
+**Implementation sequence.**
+1. Backend: extend `updateScheduledDetails` (repo) then `patchRecording` (service)
+   for `recorded` + `stage`.
+2. Functional tests (below), `npm test` green.
+3. `RecordingDetail.vue`: inline edit panel + `saveEdit`/`cancelEdit`, `.btn--edit`,
+   relocate Download, replace `.danger` card with shy `.btn--trash` + caption.
+4. `npm run build`, live-verify via Playwright against the running dev servers.
+
+**Functional tests** (added to `test/functional/server.test.ts`, tap, driving a
+recording to `recorded` via the private transition socket as the existing file-
+serve test does):
+
+```
+t.test("edits title and stage on a finished recording via PATCH", async (t) => {})       // 200; title+stage persist on subsequent GET
+t.test("rejects editing start/stop/quality on a finished recording", async (t) => {})     // 409 STATUS_CONFLICT for each of start_at/stop_at/quality
+t.test("clears stage when PATCHed with an empty stage on a finished recording", async (t) => {}) // 200; stage becomes null
+```
+
 ### Phase 5 — the Cut workflow (trim & split)
 
 **Complexity: Medium.** Non-destructive **Cut** operations over already-finished
