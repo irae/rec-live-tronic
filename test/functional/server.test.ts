@@ -1586,12 +1586,52 @@ t.test("keep on a trim defaults to keeping the single piece; split keeps only ch
   const splitResponse = await fetch(`${base}/recordings/${splitId}/cut/${splitDraft.id}/keep`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ keep: [0, 2], titles: { "0": "Opening set", "2": "Closing set" } }),
+    body: JSON.stringify({ keep: [0, 2], overrides: { "0": { title: "Opening set" }, "2": { title: "Closing set" } } }),
   });
   t.equal(splitResponse.status, 200);
   const splitBody = await splitResponse.json() as { recordings: { title: string }[] };
   t.equal(splitBody.recordings.length, 2);
   t.same(splitBody.recordings.map((r) => r.title).sort(), ["Closing set", "Opening set"]);
+});
+
+t.test("keep applies per-piece artist/venue/event/stage overrides", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+
+  const id = await createFinishedRecording(base, "keep field overrides source");
+  await fetch(`${base}/recordings/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ artist: "Source Artist", venue: "Source Venue", event: "Source Event", stage: "Source Stage" }),
+  });
+  const draft = await createSplitDraft(base, id, ["20:00", "40:00"]);
+  const response = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      keep: [0, 1],
+      overrides: {
+        "0": { title: "Overridden title", artist: "Piece Artist", venue: "Piece Venue", event: "Piece Event", stage: "Piece Stage" },
+      },
+    }),
+  });
+  t.equal(response.status, 200);
+  const body = await response.json() as { recordings: { title: string; artist: string | null; venue: string | null; event: string | null; stage: string | null }[] };
+  t.equal(body.recordings.length, 2);
+  const overridden = body.recordings.find((r) => r.title === "Overridden title")!;
+  t.ok(overridden);
+  t.equal(overridden.artist, "Piece Artist");
+  t.equal(overridden.venue, "Piece Venue");
+  t.equal(overridden.event, "Piece Event");
+  t.equal(overridden.stage, "Piece Stage");
+
+  const inherited = body.recordings.find((r) => r.title !== "Overridden title")!;
+  t.ok(inherited);
+  t.equal(inherited.artist, "Source Artist");
+  t.equal(inherited.venue, "Source Venue");
+  t.equal(inherited.event, "Source Event");
+  t.equal(inherited.stage, "Source Stage");
 });
 
 t.test("promoted recordings are listed, served, and re-cuttable like any other recording", async (t) => {
@@ -1694,7 +1734,7 @@ t.test("rejects an invalid title override without orphaning renamed piece files"
   const response = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ keep: [0, 1], titles: { "0": "   " } }),
+    body: JSON.stringify({ keep: [0, 1], overrides: { "0": { title: 123 } } }),
   });
   t.equal(response.status, 400);
   const { existsSync } = await import("node:fs");

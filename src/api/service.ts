@@ -301,7 +301,7 @@ export class RecorderService {
     const parsed = parseCutRequest({ mode: draft.mode, ...(JSON.parse(draft.params) as Record<string, unknown>) }, durationSeconds);
 
     if (input !== undefined && input !== null && typeof input !== "object") throw new AppError("VALIDATION_ERROR", 400, "Request body must be an object");
-    const body = (input ?? {}) as { keep?: unknown; titles?: unknown };
+    const body = (input ?? {}) as { keep?: unknown; overrides?: unknown };
 
     let keepIndices: number[];
     if (body.keep === undefined) {
@@ -317,36 +317,53 @@ export class RecorderService {
       if (keepIndices.length === 0) throw new AppError("VALIDATION_ERROR", 400, "keep must include at least one piece index");
     }
 
-    let titles: Record<string, unknown> = {};
-    if (body.titles !== undefined) {
-      if (typeof body.titles !== "object" || body.titles === null || Array.isArray(body.titles)) throw new AppError("VALIDATION_ERROR", 400, "titles must be an object keyed by piece index");
-      titles = body.titles as Record<string, unknown>;
-      for (const key of Object.keys(titles)) {
+    let overrides: Record<string, { title?: unknown; artist?: unknown; venue?: unknown; event?: unknown; stage?: unknown }> = {};
+    if (body.overrides !== undefined) {
+      if (typeof body.overrides !== "object" || body.overrides === null || Array.isArray(body.overrides)) throw new AppError("VALIDATION_ERROR", 400, "overrides must be an object keyed by piece index");
+      overrides = body.overrides as Record<string, { title?: unknown; artist?: unknown; venue?: unknown; event?: unknown; stage?: unknown }>;
+      for (const key of Object.keys(overrides)) {
         const index = Number(key);
-        if (!Number.isInteger(index) || index < 0 || index >= parsed.segments.length) throw new AppError("VALIDATION_ERROR", 400, "titles contains an invalid piece index");
+        if (!Number.isInteger(index) || index < 0 || index >= parsed.segments.length) throw new AppError("VALIDATION_ERROR", 400, "overrides contains an invalid piece index");
       }
     }
+
+    // An override field that's absent or an empty string means "use the
+    // default"; any other value goes through the same text() validation used
+    // elsewhere in this file. Mirrors optionalText's empty-means-default
+    // shape, but these are creation-time fields on a brand new row rather
+    // than a PATCH-style clear-to-null.
+    const overrideField = (value: unknown, field: string, limit = 200): string | undefined => {
+      if (value === undefined) return undefined;
+      if (typeof value === "string" && value.trim() === "") return undefined;
+      return text(value, field, limit);
+    };
 
     const sourceStartMs = toUnixMilliseconds(source.startAt, "startAt");
 
     // First pass: validate everything and compute every value that could
-    // throw (title override, RFC3339 conversion) before any file is touched,
-    // so a 400 here has zero side effects on disk.
+    // throw (field overrides, RFC3339 conversion) before any file is
+    // touched, so a 400 here has zero side effects on disk.
     const toPromote = keepIndices.map((index) => {
       const segment = parsed.segments[index]!;
-      const titleOverride = titles[String(index)];
-      const title = titleOverride !== undefined
-        ? text(titleOverride, `titles[${index}]`)
-        : draft.mode === "trim" ? source.title : `${source.title} (part ${index + 1})`;
+      const override = overrides[String(index)];
+      if (override !== undefined && (typeof override !== "object" || override === null || Array.isArray(override))) {
+        throw new AppError("VALIDATION_ERROR", 400, `overrides[${index}] must be an object`);
+      }
+      const title = overrideField(override?.title, `overrides[${index}].title`, 500)
+        ?? (draft.mode === "trim" ? source.title : `${source.title} (part ${index + 1})`);
+      const artist = overrideField(override?.artist, `overrides[${index}].artist`) ?? source.artist;
+      const venue = overrideField(override?.venue, `overrides[${index}].venue`) ?? source.venue;
+      const event = overrideField(override?.event, `overrides[${index}].event`) ?? source.event;
+      const stage = overrideField(override?.stage, `overrides[${index}].stage`) ?? source.stage;
       const startAt = toRfc3339(Math.round(sourceStartMs + segment.start * 1000));
       const stopAt = toRfc3339(Math.round(sourceStartMs + segment.end * 1000));
-      return { index, newId: recordingId(), title, startAt, stopAt };
+      return { index, newId: recordingId(), title, artist, venue, event, stage, startAt, stopAt };
     });
 
     // Second pass: everything is known-valid, so it's now safe to rename
     // piece files and create their recording rows.
     const derived: Recording[] = [];
-    for (const { index, newId, title, startAt, stopAt } of toPromote) {
+    for (const { index, newId, title, artist, venue, event, stage, startAt, stopAt } of toPromote) {
       const piecePath = join(draft.workingDir, `piece-${index}.ts`);
       const destPath = join(this.config.recordingsDir, `${newId}.ts`);
       await rename(piecePath, destPath);
@@ -354,10 +371,10 @@ export class RecorderService {
         id: newId,
         url: source.url,
         title,
-        stage: source.stage,
-        artist: source.artist,
-        venue: source.venue,
-        event: source.event,
+        stage,
+        artist,
+        venue,
+        event,
         cookieId: null,
         quality: source.quality,
         startAt,
