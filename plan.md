@@ -843,116 +843,274 @@ t.test("rejects a formats probe for a non-youtube url");
       dropdown of the rest); a failed/non-live probe falls back to the static
       pills without blocking the form. Scheduled mode keeps the static pills.
 
-### Phase 5 — editing actions
+### Phase 5 — the Cut workflow (trim & split)
 
-**Complexity: Medium.** Non-destructive derived-recording operations over
-already-finished files, plus client-captured thumbnails. None of this touches the
-recorder core. (Deleting/trashing a finished recording moved to Phase 2 / Phase
-3; derived recordings created here are independent rows, trashed and deleted the
-same way as any other recording.)
+**Complexity: Medium.** Non-destructive **Cut** operations over already-finished
+recordings: one mechanism in two modes — **Trim** (keep one range) and **Split**
+(N cut points → N+1 pieces) — wrapped in a **preview-then-promote** flow. None of
+it touches the recorder core. Derived recordings created here are independent
+first-class rows, trashed and deleted like any other recording (Phase 2/3).
 
-**First step is a research-and-review gate** (same shape as Phase 2's
-design-prototype gate — a real stop-and-ask point). **Research question,
-owner-reviewed before any building continues:** *can we show a preview of the
-trimmed/split video before the user clicks "confirm", or should we split first
-and make the result non-permanent so it can be undone until confirmed?*
-Investigate both directions (in-player client-side preview vs.
-produce-then-hold-uncommitted-until-confirmed) and **pause for the owner's
-decision** before implementing the trim/split confirm UX. The job mechanism and
-derived-row pattern below hold regardless of which preview model the owner picks;
-the gate decides the confirm/undo UX wrapped around them.
+**Research-and-review gate: CLEARED.** The earlier gate asked whether to preview a
+cut before confirming or split-then-undo. It is resolved: the owner reviewed and
+**approved the preview-then-promote direction** shown in the visual mockup at
+`design-prototypes/cut-workflow/index.html`. `docs/trim-preview-research.md`
+established that every cut is a real `ffmpeg -c copy` extraction (near-instant,
+clean, near-zero PTS — never a raw byte slice), and that `mpegts.js` already does
+keyframe-accurate client-side seeking against the existing range-enabled file
+route. `docs/trim-split-edit-workflow.md` is the design sketch this plan turns
+into implementation; its "Open questions for the planner" are decided below.
 
-**Research findings (for owner review — the gate above is NOT cleared; these
-answer the research question and await the owner's sign-off).**
+**The approved mockup is the visual/UX reference EXCEPT where this plan overrides
+it.** `design-prototypes/cut-workflow/index.html` is authoritative for look, copy,
+and the state flow (Mark → "Making the cut…" processing → "Cutting room" preview
+with rough-cut cards → promoted-with-lineage). Two owner corrections override it
+and are the known deltas:
 
-1. **In-player client-side preview is cheap but imprecise.** The existing
-   `mpegts.js` player already supports client-side seeking within a loaded file
-   with zero backend work, so a "mark start/end, scrub-preview" overlay is
-   buildable cheaply. But this repo already has a documented, shipped limitation
-   that `mpegts.js` cannot give accurate seek-to-end duration for MPEG-TS
-   (progressively accurate only as more of the file demuxes), so in/out accuracy
-   would be imprecise — exactly how imprecise is unconfirmed without live-testing.
-2. **A true server-side preview clip duplicates the real trim job.** A throwaway
-   `ffmpeg -ss/-to -c copy` preview clip would duplicate the actual trim job Phase
-   5 already defines, violating this repo's simplicity guidelines for a
-   single-use-case mechanism.
-3. **Trash-and-redo already covers a bad cut with zero new code.** Phase 3's trash
-   (soft-delete, restore, 30-day purge) already applies to Phase 5's derived rows,
-   and the source is never modified, so a bad cut can simply be trashed and redone
-   with no new code.
+- **Delta 1 — manual numeric time input.** Cue-in/cue-out (trim) and cut points
+  (split) are settable **two ways**: (a) grabbed from the player's current
+  position (the mockup's "Cue in / Cue out / Drop cut" buttons), AND (b) typed
+  directly as a timestamp. Rationale: the user may scrub precisely in VLC (via the
+  existing copy-URL / "Open in VLC" affordance) over a slow link on a large file
+  and then type the exact timestamp here, rather than seeking inside the in-browser
+  `mpegts.js` player (which has the documented seek-accuracy caveat for not-yet-
+  demuxed regions).
+- **Delta 2 — "Discard" becomes "Adjust".** In the preview state the secondary
+  action is **Adjust**, not "Discard": it returns to the mark screen with the
+  same cue/cut points **prefilled**, so the user nudges them. A full abandon is
+  available **only from the very first mark screen, before any preview exists** —
+  after a preview exists there is no destructive shortcut (closing the tab is the
+  escape hatch; the working folder is reclaimed by the sweep below). So the flows
+  are: (a) mark → preview → keep; (b) mark → preview → **adjust** → nudge →
+  preview → … → keep; (c) abandon only from the first mark screen.
 
-**Recommendation (pending owner review):** no dedicated preview mechanism — rely
-on trash-and-redo as the primary safety net, with the existing player's free
-scrub capability as an optional aid for picking timestamps before submitting a
-cut.
+**One mechanism, two modes.** Trim and split are one operation configured
+differently, per the sketch. The operation: take a finished source recording and
+a set of offsets chosen client-side, run `ffmpeg -c copy` to produce one or more
+**preview pieces** in a per-source working folder, let the user review them, and
+on approval **promote** the kept piece(s) to first-class recordings linked back to
+the source. Trim = one kept range → one piece; Split = N cut points → N+1 pieces.
 
-Trim and split follow the **derived-recording-row** pattern: each produces one
-or more new recording rows with their own server-generated IDs whose output
-paths derive only from those new IDs. The source row, its `ts_path`, and its
-`final_path` are never modified or deleted, so a bad operation is never
-destructive.
+**Naming (decides sketch open question d).** Feature: **Cut**, modes **Trim** /
+**Split**. The in-progress, not-yet-promoted edit is a **cut draft** (table
+`cut_drafts`); its produced files are **preview pieces** ("rough cut" in UI). The
+lineage column is **`cut_from_id`**. UI copy from the mockup is kept verbatim
+except the two deltas: "Make the cut", "Making the cut…", "Cutting room", "rough
+cut · preview", primary **Keep** / **Keep selected**, secondary **Adjust**
+(not "Discard"), lineage "Cut from … · See original", reciprocal "Re-cut into N …
+· See cuts", Archive badge "✂ Cut".
 
-**Job mechanism (decision).** Trim and split run as a **lightweight one-shot
-tracked `ffmpeg -c copy` job**, not the fully reconciled, crash/reboot-
-recoverable `mux-<id>` systemd machinery. These are quick, bounded operations on
-finished files (seconds to a couple of minutes), so the heavier reconciled unit
-type is unnecessary here — the owner's own framing when proposing trim was "easy
-with the web process, no need to touch the recorder core". A short-lived tracked
-job with simple durable state (the derived row lands `recorded` on atomic
-success, `failed` on error, preserving every file either way) is sufficient.
-Phase 8's remux inherits or extends this same mechanism (see Phase 8); this
-mechanism is introduced here, so there is no forward reference to unbuilt
-machinery. Offsets and cut points are validated numeric/`HH:MM:SS` values passed
-as argv, never shell fragments.
+**Decision — per-source working folder (sketch open question a).** The draft's
+preview pieces are written to a subdirectory of the existing `recordingsDir` named
+after the source's file basename without extension — the owner's literal
+instruction: source `${sourceId}.ts` → sibling folder `${sourceId}/`, e.g.
+`recordingsDir/rec-abc123/piece-0.ts`. The source `.ts` stays flat and untouched
+(honors "don't move existing files"); only a new folder + new files are added,
+all under the one `rec-media`-group-readable directory the app already manages,
+so pieces are SSH-inspectable like the source and its `.log`. A file `rec-abc.ts`
+and a directory `rec-abc/` coexist fine. No new config directory. Pieces are
+named `piece-<index>.ts`, index from 0.
 
-1. **Trim** — `POST /recordings/:id/trim` (curl-first JSON: `{ "start": "14:36",
-   "end"?: "1:23:45" }`, at least one of `start`/`end` required, ffmpeg-format
-   offsets, `duration` accepted as an alias for `end`). Recordings are
-   deliberately padded — the owner schedules 10–20 min of buffer before and
-   after the real event — so cutting a finished file down to its true content
-   boundary (e.g. a B2B set that actually started 14m36s in) is a recurring
-   need, not a one-off. `404` if the source does not exist; `409` if it is not
-   finished (`recorded`/`muxed`). Creates one new derived recording row and runs
-   `ffmpeg -ss <start> [-to <end>] -i <source> -c copy <new-output>` as the
-   lightweight job above; publish the derived row finished only on atomic
-   success, and on failure preserve every file and leave it `failed`.
-2. **Split** — `POST /recordings/:id/split` (curl-first JSON: an ordered list of
-   cut points as ffmpeg-format offsets, e.g. `{ "cuts": ["20:00", "1:05:00"] }`).
-   Same finished-source gate (`404`/`409`) and same derived-row pattern as trim,
-   but takes N cut points and produces N+1 new derived recording rows from the
-   one source — each segment an independent `ffmpeg -c copy` cut with its own ID
-   and output path, so a long single capture becomes multiple derived
-   recordings. All-or-nothing: publish the derived rows finished only when every
-   segment cut succeeds; on any failure preserve every file and leave the failed
-   derived rows `failed`. **⚠ Owner framing to reconcile:** the owner described
-   split as "record becomes two records, video splits keep one of the IDs and
-   recording gets split to new Id, end result is the same as if recorded
-   separately" — i.e. one result keeps the *original* ID and the source is
-   consumed, which diverges from the source-preserving all-new-derived-rows
-   decision above. Confirm with the owner which semantics win (keep-one-ID /
-   source-consumed vs. source-preserved / all-new-IDs) before building; the rest
-   of the mechanism is unaffected either way.
-3. **Client-captured thumbnails.** Possible but not yet verified end to end: the
-   owner pauses the `mpegts.js` player at a chosen frame and grabs it from the
-   `<video>` element via `<canvas>.drawImage()` + `toBlob()`/`toDataURL()` —
-   standard client-side frame capture that works on any rendered `<video>`
-   element regardless of how it is fed (MSE via `mpegts.js` is no different from a
-   plain file source here), and is not blocked by canvas tainting since the video
-   is same-origin. The client POSTs the captured image to a new endpoint to store
-   as the recording's thumbnail. Needs: the new upload endpoint / storage
-   location, and deciding whether/how a thumbnail surfaces in the Archive list.
-4. Derived recordings are listed, served, and themselves re-trimmable/re-
-   splittable exactly like any other recording through the existing
-   `GET /recordings/:id/file` route — no new serving path is introduced. Extend
-   the functional server suite (test names only):
+**Decision — a `cut_drafts` table, one active draft per source (sketch open
+question b; resolves Delta 2's adjust-loop state).** The flow is **stateful**, not
+stateless: a lightweight `cut_drafts` row tracks each in-progress edit so orphaned
+working folders are cleaned up by a query, not a filesystem heuristic — consistent
+with the app being SQLite's only writer and with the existing trash auto-sweep
+(`autoSweepTrash` / `listTrashedOlderThan`). **The adjust loop reuses the same
+draft and the same working folder, overwriting the pieces in place.** A source has
+**at most one `previewing` draft at a time** (enforced by a partial unique index);
+`POST /recordings/:id/cut` on a source that already has a `previewing` draft
+**regenerates** its pieces into the same `${sourceId}/` folder and updates the
+stored params, rather than creating a second draft. Rationale: the working folder
+is inherently one-per-source (named after the source), `-c copy` regeneration is
+near-instant so overwriting is cheap, and reusing one row means an adjust loop of
+any length leaks no intermediate drafts to clean up. Abandonment (tab close after
+preview, or a first-screen abandon that never created a draft) leaves at most one
+stale folder per source, reclaimed by `sweepStaleCutDrafts`.
+
+**Decision — promotion semantics (sketch open question c; supersedes the old
+"keep-one-ID / source-consumed" framing).** The source is **always preserved**;
+promotion **never** consumes it or reuses its ID. Each kept piece becomes a new
+`recorded` recording, indistinguishable from a live capture except for one
+additive lineage field. Per derived row:
+- `id`: new `rec-<uuid>`. `ts_path`: flat `join(recordingsDir, "${newId}.ts")` —
+  the kept piece is `rename()`d out of the working folder to the flat path (an
+  atomic same-filesystem move, not a copy), keeping the app-wide flat `${id}.ts`
+  convention the file route relies on.
+- `status`: `recorded` (terminal, streamable; the DB CHECK has no `muxed`).
+- `url`, `stage`, `quality`: inherited from the source (`-c copy` preserves the
+  encoding, so the source's `quality` label stays accurate).
+- `cookie_id`: **null** — a finished derived file needs no capture cookie, and
+  inheriting one would spuriously block cookie deletion.
+- `start_at` / `stop_at`: the **sub-range's real wall-clock times**, computed as
+  `source.start_at + offset` for each edge (trim: start/end offsets; split piece
+  *k*: the k-1 and k cut offsets, first piece from 0, last piece to source
+  duration). Makes the row a truthful capture of exactly that wall-clock window,
+  satisfies the `start_at < stop_at` CHECK, and yields the correct displayed
+  duration.
+- `unit_name`: synthetic `${newId}.service` (NOT NULL filler; never launched —
+  the reconciler only touches `scheduled`/`recording` rows).
+- `title`: default suffix — trim → `"<source title> (cut)"`, split → `"<source
+  title> (part N)"`; `POST …/keep` accepts optional per-piece title overrides;
+  retitle later via the existing `PATCH /recordings/:id`.
+- `cut_from_id`: the source recording's id. Coexists with "indistinguishable from
+  a live capture" because it is purely additive metadata — every existing route
+  treats the row identically; only the detail/list UI surfaces the "Cut from"
+  line. A live capture simply has `cut_from_id = null`.
+
+**Job mechanism.** Each `-c copy` extraction runs as a **lightweight one-shot
+`ffmpeg -c copy` job** via `execFile(ffmpegBin, argv)` (never a shell), not the
+reconciled `mux-<id>` systemd machinery — bounded, seconds-long operations on
+finished files. Add `ffmpegBin` to `Config` (`REC_LIVE_FFMPEG_BIN`, default
+`/usr/bin/ffmpeg`), mirroring `streamlinkBin`. All `-ss` go **before** `-i` (fast
+keyframe seek); `-to` is the absolute end timestamp on the source timeline (as
+`docs/trim-preview-research.md` validated on ffmpeg 8.1.1). Offsets are validated
+numeric/`HH:MM:SS`/`MM:SS`/`SS` values passed as argv only. Phase 8's remux reuses
+this same mechanism (see Phase 8). **Source non-destructiveness is the hard
+invariant:** the source row, its `ts_path`, and its `final_path` are never
+modified or deleted by any cut.
+
+**Data model deltas.** Two migrations:
+- `005-recording-cut-lineage.sql` — `ALTER TABLE recordings ADD COLUMN
+  cut_from_id TEXT REFERENCES recordings(id) ON DELETE SET NULL;` (a purged source
+  drops lineage but the derived recording survives, independent). Thread
+  `cutFromId` through `Recording`, `RecordingRow`, `selectColumns`, `mapRecording`,
+  and the public `mapRecording` shape in `src/api/service.ts` (so detail/list carry
+  it).
+- `006-cut-drafts.sql` — `CREATE TABLE cut_drafts (id TEXT PRIMARY KEY, source_id
+  TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE, mode TEXT NOT NULL
+  CHECK (mode IN ('trim','split')), params TEXT NOT NULL, working_dir TEXT NOT
+  NULL, status TEXT NOT NULL CHECK (status IN ('previewing','promoted','failed')),
+  piece_count INTEGER NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT
+  NULL);` plus `CREATE UNIQUE INDEX cut_drafts_active_source_idx ON
+  cut_drafts(source_id) WHERE status = 'previewing';`. New `CutDraftRepository`
+  (`src/recordings/cut-draft-repository.ts` — exports `CutDraftRepository` with
+  `upsertPreviewing`, `getById`, `getActiveBySource`, `markPromoted`, `delete`,
+  `listStaleOlderThan`).
+
+**API surface (curl-first).**
+1. **`POST /recordings/:id/cut`** — create or regenerate the source's active
+   draft. Trim body: `{ "mode": "trim", "start": "14:36", "end"?: "1:23:45" }`
+   (`start` required, `end` optional → to EOF; `duration` accepted as an alias for
+   `end`). Split body: `{ "mode": "split", "cuts": ["20:00", "1:05:00"] }`
+   (ordered offsets → N+1 pieces). `404` if the source is missing; `409` if it is
+   not `recorded`; `400` on out-of-order/out-of-range/malformed offsets. Runs the
+   `-c copy` extraction(s) into `recordingsDir/${sourceId}/`, upserts the single
+   `previewing` draft, and returns
+   `{ "draft": { "id", "mode", "status": "previewing", "pieces": [ { "index",
+   "start", "end", "duration", "file_url" } ] } }`. Reruns overwrite the pieces
+   (the Adjust loop).
+2. **`GET /recordings/:id/cut/:draftId/pieces/:index/file`** — range-served
+   preview piece (same `sendFile` + `video/mp2t` + `dotfiles:"allow"` pattern as
+   `GET /recordings/:id/file`), so `mpegts.js` plays a rough cut. `404` if the
+   draft/source/piece does not match.
+3. **`POST /recordings/:id/cut/:draftId/keep`** — promote. Body `{ "keep"?: [0,1],
+   "titles"?: { "0": "…" } }` (trim defaults `keep` to `[0]`; split defaults to all
+   indices). For each kept index: `rename()` `piece-<index>.ts` → flat
+   `${newId}.ts`, insert the derived `recorded` row (fields per promotion semantics
+   above, `cut_from_id = :sourceId`), then mark the draft `promoted` and remove the
+   working folder (dropping un-kept pieces). Returns `{ "recordings": [ …derived
+   rows… ] }`. `404` draft/source; `409` if the draft is not `previewing`.
+4. **`DELETE /recordings/:id/cut/:draftId`** — abandon a draft (remove working
+   folder + row), `204`. Not surfaced as a preview-state button (Delta 2); used by
+   the sweep, by tests, and as the first-screen safety path. The source's
+   permanent-delete path (`purgeOne`) also removes any leftover `${id}/` folder.
+5. **Reciprocal read** — `GET /recordings?cut_from=<id>` filters to the rows a
+   source produced (the mockup's "See cuts"); `cut_from_id` on `GET
+   /recordings/:id` drives the "Cut from … · See original" line.
+
+**Orphan cleanup.** Add `sweepStaleCutDrafts(maxAgeMs = 24h)` to `RecorderService`
+(mirrors `autoSweepTrash`): delete each `previewing` draft older than `maxAgeMs`
+along with its working folder, invoked from the same periodic hook that runs the
+trash sweep.
+
+**Client (`web-client`).** The cut console lives in `RecordingDetail.vue` (or a
+child component it renders), gated to `recorded` recordings. Trim/Split mode
+toggle; a timeline with playhead + cue/cut markers; for **each** cue/cut both a
+"grab from player" button (sets the offset from the `<video>` `currentTime`) **and**
+an editable timestamp field (Delta 1) bound to the same offset — grabbing fills the
+field, typing overrides it. Add offset parse/format helpers (accept `H:MM:SS`,
+`MM:SS`, `SS`, fractional seconds; display normalized `H:MM:SS`) submitted as the
+same ffmpeg-format strings the server passes to `-ss`/`-to`. States mirror the
+mockup: Mark → processing overlay ("Making the cut…") → "Cutting room" (rough-cut
+`mpegts.js` preview players fed from the piece file route, original player kept
+alive but collapsed via `height:0;overflow:hidden`) → **Adjust** (re-open Mark
+prefilled) or **Keep**/**Keep selected**. A first-screen abandon just closes the
+console (no draft yet). Promoted rows show the lineage line; the Archive list shows
+the "✂ Cut" badge when `cut_from_id` is set.
+
+**Out of scope for this phase.** Client-captured thumbnails (formerly bundled into
+Phase 5) are unrelated to the cut workflow and stay on the deferred list in
+`spec.md` ("Deferred, unordered"); not planned here.
+
+**Implementation sequence (commit after each numbered step).**
+1. Migrations `005`/`006` + `CutDraftRepository`; thread `cutFromId` through the
+   recordings repository and both `mapRecording`s; unit-test the repository and the
+   offset parse/format helper. Commit.
+2. `ffmpegBin` config + the `-c copy` extraction helper (argv-only) + offset
+   validation in `src/api/service.ts`; `POST /recordings/:id/cut` (create/regenerate
+   draft, one-active-per-source) and the piece file route. Commit.
+3. `POST …/keep` (promotion: rename to flat, insert derived rows, mark promoted,
+   remove folder) + `DELETE …/cut/:draftId` + the `cut_from=` list filter +
+   `sweepStaleCutDrafts` wired into the periodic hook + `purgeOne` folder cleanup.
+   Commit.
+4. Web-client cut console: mode toggle, timeline, grab-or-type cue/cut inputs
+   (Delta 1), the four flow states, Adjust-prefill (Delta 2), Keep/Keep-selected,
+   lineage line + Archive "✂ Cut" badge. Verify live (`npm start` +
+   `npm run dev:client`) against a real finished recording — trim, split, adjust,
+   keep, and the promoted rows play from the file route. Commit.
+
+**Functional/unit test blocks (names only — bodies written at implementation
+time).**
 
 ```ts
 // test/functional/server.test.ts (additional blocks)
-t.test("trims a finished recording into a new derived recording");
-t.test("splits a finished recording into multiple derived recordings");
-t.test("rejects a trim or split of a source that is not finished");
-t.test("leaves the source recording's row and file untouched after trim/split");
+t.test("creates a trim cut draft with one preview piece from a finished recording");
+t.test("creates a split cut draft with N+1 preview pieces");
+t.test("rejects a cut of a source that is not recorded (409)");
+t.test("rejects out-of-order or out-of-range offsets (400)");
+t.test("regenerating a cut for a source reuses its single active draft (no second draft, no orphan folder)");
+t.test("range-serves a preview piece for playback");
+t.test("keep promotes selected pieces to recorded recordings with cut_from_id set");
+t.test("keep computes derived start_at/stop_at from the source wall-clock window");
+t.test("keep on a trim defaults to keeping the single piece; split keeps only checked indices");
+t.test("promoted recordings are listed, served, and re-cuttable like any other recording");
+t.test("GET /recordings?cut_from=<id> returns the source's derived recordings");
+t.test("leaves the source row and its .ts untouched after cut and after keep");
+t.test("abandoning a draft removes its working folder and row");
+t.test("sweepStaleCutDrafts removes previewing drafts (and folders) older than the cutoff");
+
+// test/unit/cut-offsets.test.ts
+t.test("parses H:MM:SS, MM:SS, SS and fractional-second offsets");
+t.test("formats seconds back to a normalized H:MM:SS string");
+t.test("rejects malformed offset strings");
 ```
+
+**Acceptance criteria — what "Phase 5 done" looks like.**
+- [ ] A finished recording's detail screen offers a Cut console (Trim/Split) that
+      is absent/inert for non-`recorded` recordings.
+- [ ] Every cue-in/cue-out (trim) and cut point (split) is settable both by
+      grabbing the player position and by typing a `H:MM:SS`/`MM:SS`/`SS`
+      timestamp, both bound to the same offset (Delta 1).
+- [ ] "Make the cut" produces preview piece(s) via `ffmpeg -c copy` into
+      `recordingsDir/${sourceId}/` and shows them as playable rough cuts with the
+      original player kept alive but collapsed.
+- [ ] The preview's secondary action is **Adjust** — it re-opens the mark screen
+      with the same points prefilled and reuses the one draft/folder; a full
+      abandon exists only on the first mark screen (Delta 2).
+- [ ] **Keep** / **Keep selected** promotes the chosen piece(s) to first-class
+      `recorded` recordings with `cut_from_id` set, sub-range wall-clock
+      `start_at`/`stop_at`, inherited `url`/`stage`/`quality`, null `cookie_id`,
+      and the working folder removed; un-kept split pieces are dropped.
+- [ ] Promoted recordings are listed, served over `GET /recordings/:id/file`, and
+      themselves re-cuttable, exactly like a live capture.
+- [ ] The source row and its `.ts` are provably untouched after any cut or keep.
+- [ ] curl parity holds for cut, piece serving, keep, abandon, and the `cut_from=`
+      filter — no browser-only path.
+- [ ] `sweepStaleCutDrafts` reclaims abandoned working folders; at most one active
+      draft exists per source.
+- [ ] `design-prototypes/cut-workflow/index.html` is honored for visuals/copy/flow
+      except the two documented deltas (manual time input; Adjust-not-Discard).
 
 ### Phase 6 — audio-only
 
