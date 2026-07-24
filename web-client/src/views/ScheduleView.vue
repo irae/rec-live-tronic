@@ -28,93 +28,137 @@
               </div>
             </div>
 
-            <div class="field">
-              <label for="url"><span class="num">01</span> · Stream URL</label>
-              <input
-                class="input"
-                id="url"
-                type="url"
-                v-model="form.url"
-                placeholder="https://youtube.com/watch?v=…"
-                @blur="handleUrlBlur"
-              />
-            </div>
+            <nav class="tabbar" role="tablist">
+              <button
+                v-for="tab in formTabs"
+                :key="tab.id"
+                type="button"
+                role="tab"
+                :aria-selected="activeTab === tab.id"
+                :class="['tabbtn', { 'tabbtn--active': activeTab === tab.id }]"
+                @click="activeTab = tab.id"
+              >{{ tab.label }}</button>
+            </nav>
 
-            <div class="field">
-              <label for="title"><span class="num">02</span> · Title</label>
-              <input
-                class="input"
-                id="title"
-                type="text"
-                v-model="form.title"
-                placeholder="Act - Stage - Festival"
-              />
-            </div>
+            <div class="tab-pane" v-show="activeTab === 'stream'">
+              <div class="field">
+                <label for="url">Stream URL</label>
+                <input
+                  class="input"
+                  id="url"
+                  type="url"
+                  v-model="form.url"
+                  placeholder="https://youtube.com/watch?v=…"
+                  @blur="handleUrlBlur"
+                />
+              </div>
 
-            <div class="field">
-              <label><span class="num">03</span> · Quality</label>
-              <template v-if="entryMode === 'now' && probedFormats && probedFormats.available">
-                <div class="quality">
-                  <input type="radio" name="q" id="qp-best" value="best" v-model="form.quality" />
-                  <label for="qp-best">best</label>
-                  <input
-                    v-for="q in probedFormats.qualities.slice(0, 2)"
-                    :key="q"
-                    type="radio"
-                    name="q"
-                    :id="'qp-' + q"
-                    :value="q"
-                    v-model="form.quality"
-                  />
-                  <label v-for="q in probedFormats.qualities.slice(0, 2)" :key="'l-' + q" :for="'qp-' + q">{{ q }}</label>
+              <div class="field">
+                <label>Quality</label>
+                <template v-if="entryMode === 'now' && probedFormats && probedFormats.available">
+                  <div class="quality">
+                    <input type="radio" name="q" id="qp-best" value="best" v-model="form.quality" />
+                    <label for="qp-best">best</label>
+                    <input
+                      v-for="q in probedFormats.qualities.slice(0, 2)"
+                      :key="q"
+                      type="radio"
+                      name="q"
+                      :id="'qp-' + q"
+                      :value="q"
+                      v-model="form.quality"
+                    />
+                    <label v-for="q in probedFormats.qualities.slice(0, 2)" :key="'l-' + q" :for="'qp-' + q">{{ q }}</label>
+                  </div>
+                  <select class="input quality-select" v-model="form.quality">
+                    <option v-for="q in probedFormats.qualities" :key="'opt-' + q" :value="q">{{ q }}</option>
+                  </select>
+                </template>
+                <div v-else class="quality">
+                  <input type="radio" name="q" id="q0" value="best" v-model="form.quality" />
+                  <label for="q0">best</label>
+                  <input type="radio" name="q" id="q1" value="1080p" v-model="form.quality" />
+                  <label for="q1">1080p</label>
+                  <input type="radio" name="q" id="q2" value="720p" v-model="form.quality" />
+                  <label for="q2">720p</label>
+                  <input type="radio" name="q" id="q3" value="480p" v-model="form.quality" />
+                  <label for="q3">480p</label>
                 </div>
-                <select class="input quality-select" v-model="form.quality">
-                  <option v-for="q in probedFormats.qualities" :key="'opt-' + q" :value="q">{{ q }}</option>
-                </select>
-              </template>
-              <div v-else class="quality">
-                <input type="radio" name="q" id="q0" value="best" v-model="form.quality" />
-                <label for="q0">best</label>
-                <input type="radio" name="q" id="q1" value="1080p" v-model="form.quality" />
-                <label for="q1">1080p</label>
-                <input type="radio" name="q" id="q2" value="720p" v-model="form.quality" />
-                <label for="q2">720p</label>
-                <input type="radio" name="q" id="q3" value="480p" v-model="form.quality" />
-                <label for="q3">480p</label>
               </div>
             </div>
 
-            <div class="field" v-if="entryMode === 'scheduled'">
-              <label for="start"><span class="num">04</span> · Start</label>
-              <input
-                class="input"
-                id="start"
-                type="datetime-local"
-                v-model="form.start"
-              />
+            <div class="tab-pane" v-show="activeTab === 'billing'">
+              <div class="field">
+                <label for="title">Title <small class="hint">optional — leave blank to compose from below</small></label>
+                <input
+                  class="input"
+                  id="title"
+                  type="text"
+                  v-model="form.title"
+                  placeholder="Act - Stage - Festival"
+                />
+              </div>
+
+              <div class="field-row">
+                <div class="field">
+                  <label for="artist">Artist</label>
+                  <input class="input" id="artist" type="text" v-model="form.artist" placeholder="Optional" />
+                </div>
+                <div class="field">
+                  <label for="venue">Venue</label>
+                  <input class="input" id="venue" type="text" v-model="form.venue" placeholder="Optional" />
+                </div>
+              </div>
+
+              <div class="field-row">
+                <div class="field">
+                  <label for="event">Event</label>
+                  <input class="input" id="event" type="text" v-model="form.event" placeholder="Optional" />
+                </div>
+                <div class="field">
+                  <label for="stage">Stage</label>
+                  <input class="input" id="stage" type="text" v-model="form.stage" placeholder="Optional" />
+                </div>
+              </div>
+
+              <p v-if="!form.title.trim() && composedTitlePreview" class="title-preview">
+                Will be titled <strong>{{ composedTitlePreview }}</strong>
+              </p>
             </div>
 
-            <div class="field">
-              <label for="duration"><span class="num">05</span> · Duration <small class="hint">h:mm</small></label>
-              <input
-                class="input mono"
-                id="duration"
-                type="text"
-                inputmode="numeric"
-                placeholder="1:30"
-                v-model="form.duration"
-                @blur="handleDurationBlur"
-              />
-            </div>
+            <div class="tab-pane" v-show="activeTab === 'schedule'">
+              <div class="field" v-if="entryMode === 'scheduled'">
+                <label for="start">Start</label>
+                <input
+                  class="input"
+                  id="start"
+                  type="datetime-local"
+                  v-model="form.start"
+                />
+              </div>
 
-            <div class="field" v-if="entryMode === 'scheduled'">
-              <label for="stop"><span class="num">06</span> · Stop</label>
-              <input
-                class="input"
-                id="stop"
-                type="datetime-local"
-                v-model="form.stop"
-              />
+              <div class="field">
+                <label for="duration">Duration <small class="hint">h:mm</small></label>
+                <input
+                  class="input mono"
+                  id="duration"
+                  type="text"
+                  inputmode="numeric"
+                  placeholder="1:30"
+                  v-model="form.duration"
+                  @blur="handleDurationBlur"
+                />
+              </div>
+
+              <div class="field" v-if="entryMode === 'scheduled'">
+                <label for="stop">Stop</label>
+                <input
+                  class="input"
+                  id="stop"
+                  type="datetime-local"
+                  v-model="form.stop"
+                />
+              </div>
             </div>
 
             <div class="field">
@@ -239,13 +283,34 @@ const extendForm = reactive({
 
 const entryMode = ref<"scheduled" | "now">("scheduled");
 
+const formTabs = [
+  { id: "stream" as const, label: "Stream" },
+  { id: "billing" as const, label: "Billing" },
+  { id: "schedule" as const, label: "Schedule" },
+];
+const activeTab = ref<"stream" | "billing" | "schedule">("stream");
+
 const form = reactive({
   url: "",
   title: "",
+  artist: "",
+  venue: "",
+  event: "",
+  stage: "",
   quality: "best",
   start: "",
   duration: "1:10",
   stop: "",
+});
+
+// Read-only mirror of the server's composition rule (Stream A,
+// RecorderService.createRecording) so the preview matches what the API
+// will actually store; the form never sends a composed title itself.
+const composedTitlePreview = computed(() => {
+  return [form.artist, form.venue, form.event, form.stage]
+    .map((segment) => segment.trim())
+    .filter((segment) => segment !== "")
+    .join(" - ");
 });
 
 // Now-mode-only: probed live-stream formats from GET /recordings/formats.
@@ -359,6 +424,26 @@ onUnmounted(() => {
   if (pollInterval) clearInterval(pollInterval);
 });
 
+// Builds the optional title/artist/venue/event/stage fields for the create
+// payload. Composition is server-side (Stream A); this only forwards what
+// the user typed, falling back to the URL as a title only when nothing else
+// was given at all (so a bare URL still produces a usable recording).
+function metadataPayload(): Record<string, string> {
+  const payload: Record<string, string> = {};
+  const title = form.title.trim();
+  const artist = form.artist.trim();
+  const venue = form.venue.trim();
+  const event = form.event.trim();
+  const stage = form.stage.trim();
+  if (title) payload.title = title;
+  if (artist) payload.artist = artist;
+  if (venue) payload.venue = venue;
+  if (event) payload.event = event;
+  if (stage) payload.stage = stage;
+  if (!title && !artist && !venue && !event && !stage) payload.title = form.url.trim();
+  return payload;
+}
+
 async function handleAddRecording(): Promise<void> {
   if (entryMode.value === "now") {
     await handleAddRecordingNow();
@@ -366,8 +451,8 @@ async function handleAddRecording(): Promise<void> {
   }
   try {
     error.value = null;
-    if (!form.url || !form.title) {
-      error.value = "Stream URL and title are required";
+    if (!form.url) {
+      error.value = "Stream URL is required";
       return;
     }
 
@@ -380,7 +465,7 @@ async function handleAddRecording(): Promise<void> {
 
     const newRecording = await api.createRecording({
       url: form.url,
-      title: form.title,
+      ...metadataPayload(),
       quality: form.quality,
       start_at: startDate.toISOString(),
       stop_at: stopDate.toISOString(),
@@ -408,11 +493,10 @@ async function handleAddRecordingNow(): Promise<void> {
 
     const startDate = new Date();
     const stopDate = new Date(startDate.getTime() + (parseDurationMinutes(form.duration) ?? 70) * 60_000);
-    const title = form.title.trim() || form.url.trim();
 
     const newRecording = await api.createRecording({
       url: form.url,
-      title,
+      ...metadataPayload(),
       quality: form.quality,
       start_at: startDate.toISOString(),
       stop_at: stopDate.toISOString(),
@@ -430,11 +514,16 @@ async function handleAddRecordingNow(): Promise<void> {
 function resetForm(): void {
   form.url = "";
   form.title = "";
+  form.artist = "";
+  form.venue = "";
+  form.event = "";
+  form.stage = "";
   form.quality = "best";
   form.start = "";
   form.duration = "1:10";
   form.stop = "";
   probedFormats.value = null;
+  activeTab.value = "stream";
 }
 
 // Best-effort title prefill: never blocks or errors the form on a slow/failed
@@ -786,6 +875,67 @@ function formatTimeInfo(rec: Recording): string {
   color: var(--ink-soft);
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.tabbar {
+  display: flex;
+  margin: 0 -18px 18px;
+  padding: 0 18px;
+  border-bottom: 2.5px solid var(--line);
+}
+
+.tabbtn {
+  flex: 1;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  padding: 12px 6px;
+  margin-bottom: -2.5px;
+  background: none;
+  border: none;
+  border-bottom: 3px solid transparent;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: all .12s;
+}
+
+.tabbtn:hover {
+  color: var(--ink);
+}
+
+.tabbtn--active {
+  color: var(--violet);
+  border-bottom-color: var(--violet);
+}
+
+.tab-pane {
+  padding-top: 2px;
+}
+
+.field-row {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 16px;
+}
+
+.field-row .field {
+  margin-bottom: 0;
+}
+
+.title-preview {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .04em;
+  color: var(--ink-soft);
+  margin: -6px 0 16px;
+}
+
+.title-preview strong {
+  color: var(--violet);
+  font-weight: 700;
 }
 
 .entry-toggle {
@@ -1161,13 +1311,25 @@ function formatTimeInfo(rec: Recording): string {
 
 @media (min-width: 900px) {
   .split {
-    grid-template-columns: 420px minmax(0, 1fr);
+    grid-template-columns: 480px minmax(0, 1fr);
     gap: 34px;
   }
 
   .booking {
     position: sticky;
     top: 88px;
+  }
+}
+
+@media (min-width: 1200px) {
+  .split {
+    grid-template-columns: 560px minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 480px) {
+  .field-row {
+    grid-template-columns: 1fr;
   }
 }
 </style>

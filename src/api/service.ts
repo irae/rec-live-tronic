@@ -13,12 +13,20 @@ import { storeCookieAtomically } from "./storage.js";
 const qualityValues = ["best", "1080p", "720p", "480p", "360p", "worst"] as const;
 const allowedYouTubeHosts = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"]);
 
-type RecordingInput = { url: unknown; title: unknown; cookie_id?: unknown; quality?: unknown; start_at: unknown; stop_at: unknown };
+type RecordingInput = { url: unknown; title?: unknown; artist?: unknown; venue?: unknown; event?: unknown; stage?: unknown; cookie_id?: unknown; quality?: unknown; start_at: unknown; stop_at: unknown };
 type RecordingPatch = { title?: unknown; stage?: unknown; quality?: unknown; start_at?: unknown; stop_at?: unknown };
 
 function text(value: unknown, field: string, limit = 500): string {
   if (typeof value !== "string" || !value.trim() || value.length > limit) throw new AppError("VALIDATION_ERROR", 400, `${field} must be a non-empty string`);
   return value.trim();
+}
+
+function optionalText(value: unknown, field: string, limit = 200): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") throw new AppError("VALIDATION_ERROR", 400, `${field} must be a string`);
+  const trimmed = value.trim();
+  if (trimmed.length > limit) throw new AppError("VALIDATION_ERROR", 400, `${field} must be a non-empty string`);
+  return trimmed === "" ? null : trimmed;
 }
 
 function instant(value: unknown, field: string): string {
@@ -141,10 +149,16 @@ export class RecorderService {
     }
     const qualityValue = input.quality === undefined ? "best" : quality(input.quality);
     const id = recordingId();
-    const title = text(input.title, "title");
     const url = validateUrl(input.url);
-    const stage = stageFromTitle(title) ?? (await fetchOembedMetadata(this.config.oembedEndpoint, url)).authorName;
-    return mapRecording(this.recordings.create({ id, url, title, stage, cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
+    const artist = optionalText(input.artist, "artist");
+    const venue = optionalText(input.venue, "venue");
+    const event = optionalText(input.event, "event");
+    const explicitStageInput = optionalText(input.stage, "stage");
+    const explicitTitle = typeof input.title === "string" && input.title.trim() ? input.title.trim() : null;
+    const title = explicitTitle ?? [artist, venue, event, explicitStageInput].filter((segment): segment is string => segment !== null && segment !== "").join(" - ");
+    if (!title) throw new AppError("VALIDATION_ERROR", 400, "title must be a non-empty string");
+    const stage = explicitStageInput ?? stageFromTitle(title) ?? (await fetchOembedMetadata(this.config.oembedEndpoint, url)).authorName;
+    return mapRecording(this.recordings.create({ id, url, title, stage, artist, venue, event, cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
   }
 
   listRecordings(status?: unknown, filters?: { trashed?: boolean }): ReturnType<typeof mapRecording>[] {

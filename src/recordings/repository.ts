@@ -18,6 +18,9 @@ export interface Recording {
   url: string;
   title: string;
   stage: string | null;
+  artist: string | null;
+  venue: string | null;
+  event: string | null;
   trashedAt: string | null;
   cookieId: string | null;
   cookiePath: string | null;
@@ -39,6 +42,9 @@ export interface CreateRecordingInput {
   url: string;
   title: string;
   stage?: string | null;
+  artist?: string | null;
+  venue?: string | null;
+  event?: string | null;
   cookieId?: string | null;
   quality: string;
   startAt: UtcInstant;
@@ -51,6 +57,9 @@ export interface CreateRecordingInput {
 export interface UpdateScheduledDetails {
   title?: string;
   stage?: string | null;
+  artist?: string | null;
+  venue?: string | null;
+  event?: string | null;
   quality?: string;
   startAt?: UtcInstant;
   stopAt?: UtcInstant;
@@ -74,6 +83,9 @@ interface RecordingRow {
   url: string;
   title: string;
   stage: string | null;
+  artist: string | null;
+  venue: string | null;
+  event: string | null;
   trashed_at: number | null;
   cookie_id: string | null;
   cookie_path: string | null;
@@ -91,7 +103,7 @@ interface RecordingRow {
 }
 
 const selectColumns = `
-  SELECT recordings.id, recordings.url, recordings.title, recordings.stage, recordings.trashed_at, recordings.cookie_id, cookies.path AS cookie_path,
+  SELECT recordings.id, recordings.url, recordings.title, recordings.stage, recordings.artist, recordings.venue, recordings.event, recordings.trashed_at, recordings.cookie_id, cookies.path AS cookie_path,
          recordings.quality, recordings.start_at, recordings.stop_at, recordings.status, recordings.unit_name,
          recordings.ts_path, recordings.last_started_boot_id, recordings.last_started_stop_at, recordings.version, recordings.created_at, recordings.updated_at
   FROM recordings LEFT JOIN cookies ON cookies.id = recordings.cookie_id`;
@@ -115,6 +127,9 @@ function mapRecording(row: RecordingRow): Recording {
     url: row.url,
     title: row.title,
     stage: row.stage,
+    artist: row.artist,
+    venue: row.venue,
+    event: row.event,
     trashedAt: row.trashed_at === null ? null : toRfc3339(row.trashed_at),
     cookieId: row.cookie_id,
     cookiePath: row.cookie_path,
@@ -142,9 +157,9 @@ export class RecordingRepository {
     const now = timestamp(input.now, "now");
     return this.database.transaction(() => {
       this.database.prepare(`INSERT INTO recordings
-        (id, url, title, stage, cookie_id, quality, start_at, stop_at, status, unit_name, ts_path, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`)
-        .run(input.id, input.url, input.title, input.stage ?? null, input.cookieId ?? null, input.quality, startAt, stopAt, input.unitName, input.tsPath, now, now);
+        (id, url, title, stage, artist, venue, event, cookie_id, quality, start_at, stop_at, status, unit_name, ts_path, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?)`)
+        .run(input.id, input.url, input.title, input.stage ?? null, input.artist ?? null, input.venue ?? null, input.event ?? null, input.cookieId ?? null, input.quality, startAt, stopAt, input.unitName, input.tsPath, now, now);
       return this.getRequired(input.id);
     })();
   }
@@ -184,6 +199,18 @@ export class RecordingRepository {
     if (patch.stage !== undefined) {
       fields.push("stage = ?");
       values.push(patch.stage);
+    }
+    if (patch.artist !== undefined) {
+      fields.push("artist = ?");
+      values.push(patch.artist);
+    }
+    if (patch.venue !== undefined) {
+      fields.push("venue = ?");
+      values.push(patch.venue);
+    }
+    if (patch.event !== undefined) {
+      fields.push("event = ?");
+      values.push(patch.event);
     }
     if (patch.quality !== undefined) {
       fields.push("quality = ?");

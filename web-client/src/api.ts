@@ -5,6 +5,9 @@ export interface Recording {
   url: string;
   title: string;
   stage: string | null;
+  artist: string | null;
+  venue: string | null;
+  event: string | null;
   cookieId: string | null;
   quality: string;
   startAt: string;
