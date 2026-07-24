@@ -50,6 +50,7 @@ export interface CreateRecordingInput {
 
 export interface UpdateScheduledDetails {
   title?: string;
+  stage?: string | null;
   quality?: string;
   startAt?: UtcInstant;
   stopAt?: UtcInstant;
@@ -173,12 +174,16 @@ export class RecordingRepository {
   updateScheduledDetails(id: string, expectedVersion: number, patch: UpdateScheduledDetails): MutationResult<Recording> {
     assertVersion(expectedVersion);
     const fields: string[] = [];
-    const values: Array<string | number> = [];
+    const values: Array<string | number | null> = [];
     let startAt: number | undefined;
     let stopAt: number | undefined;
     if (patch.title !== undefined) {
       fields.push("title = ?");
       values.push(patch.title);
+    }
+    if (patch.stage !== undefined) {
+      fields.push("stage = ?");
+      values.push(patch.stage);
     }
     if (patch.quality !== undefined) {
       fields.push("quality = ?");
@@ -198,10 +203,13 @@ export class RecordingRepository {
     return this.database.transaction((): MutationResult<Recording> => {
       const existing = this.getById(id);
       if (existing === undefined) return { outcome: "not_found" };
-      if (existing.status === "recording" && (patch.title !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined)) {
+      if (existing.status === "recording" && (patch.title !== undefined || patch.stage !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined)) {
         return { outcome: "conflict" };
       }
-      if (existing.status !== "scheduled" && existing.status !== "recording") return { outcome: "conflict" };
+      if (existing.status === "recorded" && (patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt !== undefined)) {
+        return { outcome: "conflict" };
+      }
+      if (existing.status !== "scheduled" && existing.status !== "recording" && existing.status !== "recorded") return { outcome: "conflict" };
       const effectiveStart = startAt ?? toUnixMilliseconds(existing.startAt, "stored startAt");
       const effectiveStop = stopAt ?? toUnixMilliseconds(existing.stopAt, "stored stopAt");
       if (effectiveStart >= effectiveStop) throw new RangeError("startAt must be before stopAt");

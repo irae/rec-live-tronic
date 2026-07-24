@@ -989,3 +989,64 @@ t.test("creates a now-mode recording that starts at the current time", async (t)
   const fetchedBody = await fetched.json() as { recording: { status: string } };
   t.equal(fetchedBody.recording.status, "scheduled");
 });
+
+// Drives a fresh recording all the way to `recorded` via the private
+// transition socket (mirrors the "serves a finished recording's file" setup)
+// so the finished-recording edit tests have a real terminal-status row.
+async function seedRecordedRecording(base: string, title: string): Promise<string> {
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://www.youtube.com/watch?v=phase04a", title, start_at: "2099-01-01T00:00:00Z", stop_at: "2099-01-01T01:00:00Z" }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, { expected_status: "scheduled", expected_version: createdBody.recording.version, status: "recording" });
+  const mid = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { version: number } };
+  await writeFile(join(root, "recordings", `${id}.ts`), "capture");
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, { expected_status: "recording", expected_version: mid.recording.version, status: "recorded" });
+  return id;
+}
+
+t.test("edits title and stage on a finished recording via PATCH", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await seedRecordedRecording(base, "original finished title");
+  const patched = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ title: "renamed after capture", stage: "Second Stage" }) });
+  t.equal(patched.status, 200);
+  const fetched = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { title: string; stage: string | null; status: string } };
+  t.equal(fetched.recording.title, "renamed after capture");
+  t.equal(fetched.recording.stage, "Second Stage");
+  t.equal(fetched.recording.status, "recorded");
+});
+
+t.test("rejects editing start/stop/quality on a finished recording", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await seedRecordedRecording(base, "immutable-window recording");
+  for (const patch of [{ start_at: "2099-01-01T00:30:00Z" }, { stop_at: "2099-01-01T02:00:00Z" }, { quality: "480p" }]) {
+    const response = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+    t.equal(response.status, 409);
+    const body = await response.json() as { error: { code: string } };
+    t.equal(body.error.code, "STATUS_CONFLICT");
+  }
+});
+
+t.test("clears stage when PATCHed with an empty stage on a finished recording", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await seedRecordedRecording(base, "Artist - Main Stage - Fest");
+  const before = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { stage: string | null } };
+  t.equal(before.recording.stage, "Main Stage");
+  const patched = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ stage: "" }) });
+  t.equal(patched.status, 200);
+  const after = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { stage: string | null } };
+  t.equal(after.recording.stage, null);
+});
