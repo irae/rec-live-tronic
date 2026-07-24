@@ -337,7 +337,7 @@ export class RecorderService {
       const titleOverride = titles[String(index)];
       const title = titleOverride !== undefined
         ? text(titleOverride, `titles[${index}]`)
-        : draft.mode === "trim" ? `${source.title} (cut)` : `${source.title} (part ${index + 1})`;
+        : draft.mode === "trim" ? source.title : `${source.title} (part ${index + 1})`;
       const startAt = toRfc3339(Math.round(sourceStartMs + segment.start * 1000));
       const stopAt = toRfc3339(Math.round(sourceStartMs + segment.end * 1000));
       return { index, newId: recordingId(), title, startAt, stopAt };
@@ -372,6 +372,14 @@ export class RecorderService {
 
     this.cutDrafts.markPromoted(draftId);
     await rm(draft.workingDir, { recursive: true, force: true });
+
+    // Every successful Keep renames and trashes the source: it's a live,
+    // renamed-and-trashed backup rather than a first-class recording from
+    // this point on. Only the row (title, trashed_at) changes -- the .ts file
+    // on disk is never touched, same as any other trash operation.
+    const renamed = this.recordings.updateScheduledDetails(sourceId, source.version, { title: `${source.title} (original recording)` });
+    if (renamed.outcome !== "updated") throw new AppError("CONFLICT", 409, "Recording changed concurrently");
+    this.recordings.trash(sourceId);
 
     return { recordings: derived.map(mapRecording) };
   }

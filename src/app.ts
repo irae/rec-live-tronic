@@ -155,7 +155,7 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
   app.delete("/recordings/:id", async (request, response, next) => {
     try { response.json(await recorder.cancelRecording(request.params.id)); } catch (error) { next(error); }
   });
-  app.get("/recordings/:id/file", (request, response, next) => {
+  const serveRecordingFile: RequestHandler<{ id: string }> = (request, response, next) => {
     try {
       const { status, tsPath, title } = recorder.getRecordingFile(request.params.id);
       if (status !== "recorded") throw new AppError("STATUS_CONFLICT", 409, "Recording file is not ready to stream");
@@ -166,16 +166,16 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
       // (/srv/rec-live-tronic/recordings) has no dot segments, but allow them
       // explicitly since this path is server-constructed, not user input.
       const headers: { "Content-Type": string; "Content-Disposition"?: string } = { "Content-Type": "video/mp2t" };
-      if (request.query.download === "1") {
-        const sanitized = sanitizeFilename(title);
-        const filename = sanitized || `${request.params.id}.ts`;
-        headers["Content-Disposition"] = `attachment; filename="${filename}"`;
-      }
+      const sanitized = sanitizeFilename(title);
+      const filename = sanitized || `${request.params.id}.ts`;
+      headers["Content-Disposition"] = request.query.download === "1" ? `attachment; filename="${filename}"` : `inline; filename="${filename}"`;
       response.sendFile(tsPath, { headers, dotfiles: "allow" }, (error) => {
         if (error) next(error);
       });
     } catch (error) { next(error); }
-  });
+  };
+  app.get("/recordings/:id/file", serveRecordingFile);
+  app.get("/recordings/:id/file/:filename", serveRecordingFile);
   app.post("/recordings/:id/cut", json, async (request, response, next) => {
     try { response.status(200).json(await recorder.createCutDraft(request.params.id, request.body)); } catch (error) { next(error); }
   });

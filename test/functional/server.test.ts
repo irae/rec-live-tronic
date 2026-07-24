@@ -1037,6 +1037,32 @@ t.test("serves a finished recording file as an attachment when download=1", asyn
   t.equal(body, testContent);
 });
 
+t.test("serves a finished recording's file with a friendly filename in the URL path", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "friendly url path test");
+
+  const response = await fetch(`${base}/recordings/${id}/file/${encodeURIComponent("friendly url path test.ts")}`);
+  t.equal(response.status, 200);
+  t.equal(response.headers.get("Content-Type"), "video/mp2t");
+  t.equal(await response.text(), `source content for ${id}`);
+});
+
+t.test("sets an inline Content-Disposition with the recording's title on the plain file route", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "inline disposition test");
+
+  const response = await fetch(`${base}/recordings/${id}/file`);
+  t.equal(response.status, 200);
+  t.match(
+    response.headers.get("Content-Disposition"),
+    /^inline; filename="inline disposition test\.ts"$/,
+  );
+});
+
 t.test("serves a trashed recording's file for download", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");
@@ -1515,7 +1541,7 @@ t.test("keep promotes selected pieces to recorded recordings with cut_from_id se
   const derived = body.recordings[0]!;
   t.equal(derived.status, "recorded");
   t.equal(derived.cutFromId, id);
-  t.equal(derived.title, "keep trim source (cut)");
+  t.equal(derived.title, "keep trim source");
   const source = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { url: string; quality: string } };
   t.equal(derived.url, source.recording.url);
   t.equal(derived.quality, source.recording.quality);
@@ -1616,12 +1642,12 @@ t.test("GET /recordings?cut_from=<id> returns the source's derived recordings", 
   t.equal(otherFiltered.recordings.length, 0);
 });
 
-t.test("leaves the source row and its .ts untouched after cut and after keep", async (t) => {
+t.test("leaves the source .ts untouched after cut, and renames+trashes the source row after keep", async (t) => {
   const address = running.publicServer.address();
   if (!address || typeof address === "string") return t.fail("no public listener");
   const base = `http://127.0.0.1:${address.port}`;
   const id = await createFinishedRecording(base, "source untouched test");
-  const before = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: unknown };
+  const before = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { title: string; tsPath?: string; trashedAt: string | null } };
   const draft = await createTrimDraft(base, id, "5:00", "10:00");
   const afterCut = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: unknown };
   t.same(afterCut.recording, before.recording);
@@ -1630,10 +1656,33 @@ t.test("leaves the source row and its .ts untouched after cut and after keep", a
     headers: { "content-type": "application/json" },
     body: JSON.stringify({}),
   });
-  const afterKeep = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: unknown };
-  t.same(afterKeep.recording, before.recording);
+  const afterKeep = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { id: string; title: string; trashedAt: string | null } };
+  t.equal(afterKeep.recording.id, id);
+  t.equal(afterKeep.recording.title, "source untouched test (original recording)");
+  t.ok(afterKeep.recording.trashedAt !== null);
   const { readFileSync } = await import("node:fs");
   t.equal(readFileSync(join(root, "recordings", `${id}.ts`), "utf8"), `source content for ${id}`);
+});
+
+t.test("keep renames the source with an \"(original recording)\" suffix and moves it to trash", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "keep rename trash source");
+  const before = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { trashedAt: string | null } };
+  t.equal(before.recording.trashedAt, null);
+  const draft = await createTrimDraft(base, id, "5:00", "10:00");
+  const response = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({}),
+  });
+  t.equal(response.status, 200);
+  const after = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { title: string; trashedAt: string | null } };
+  t.equal(after.recording.title, "keep rename trash source (original recording)");
+  t.ok(after.recording.trashedAt !== null);
+  const listedTrashed = await (await fetch(`${base}/recordings?trashed=true`)).json() as { recordings: { id: string }[] };
+  t.ok(listedTrashed.recordings.some((r) => r.id === id));
 });
 
 t.test("rejects an invalid title override without orphaning renamed piece files", async (t) => {
