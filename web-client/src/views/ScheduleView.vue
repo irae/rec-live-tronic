@@ -53,7 +53,26 @@
 
             <div class="field">
               <label><span class="num">03</span> · Quality</label>
-              <div class="quality">
+              <template v-if="entryMode === 'now' && probedFormats && probedFormats.available">
+                <div class="quality">
+                  <input type="radio" name="q" id="qp-best" value="best" v-model="form.quality" />
+                  <label for="qp-best">best</label>
+                  <input
+                    v-for="q in probedFormats.qualities.slice(0, 2)"
+                    :key="q"
+                    type="radio"
+                    name="q"
+                    :id="'qp-' + q"
+                    :value="q"
+                    v-model="form.quality"
+                  />
+                  <label v-for="q in probedFormats.qualities.slice(0, 2)" :key="'l-' + q" :for="'qp-' + q">{{ q }}</label>
+                </div>
+                <select class="input quality-select" v-model="form.quality">
+                  <option v-for="q in probedFormats.qualities" :key="'opt-' + q" :value="q">{{ q }}</option>
+                </select>
+              </template>
+              <div v-else class="quality">
                 <input type="radio" name="q" id="q0" value="best" v-model="form.quality" />
                 <label for="q0">best</label>
                 <input type="radio" name="q" id="q1" value="1080p" v-model="form.quality" />
@@ -229,6 +248,19 @@ const form = reactive({
   stop: "",
 });
 
+// Now-mode-only: probed live-stream formats from GET /recordings/formats.
+// null until a successful probe arrives; the template falls back to the
+// static pills whenever this is null or reports unavailable.
+const probedFormats = ref<{ available: boolean; qualities: string[] } | null>(null);
+
+watch(() => form.url, () => {
+  probedFormats.value = null;
+});
+
+watch(entryMode, () => {
+  probedFormats.value = null;
+});
+
 // Start is the anchor field. Duration and Stop stay in sync with each other
 // (Stop = Start + Duration) without ever rewriting Start.
 let syncingTime = false;
@@ -402,19 +434,43 @@ function resetForm(): void {
   form.start = "";
   form.duration = "1:10";
   form.stop = "";
+  probedFormats.value = null;
 }
 
 // Best-effort title prefill: never blocks or errors the form on a slow/failed
 // oEmbed lookup, and never overwrites a title the user already typed.
 async function handleUrlBlur(): Promise<void> {
   const requestedUrl = form.url;
-  if (!requestedUrl || form.title) return;
+  if (!requestedUrl) return;
+  if (!form.title) {
+    lookupTitlePrefill(requestedUrl);
+  }
+  if (entryMode.value === "now") {
+    lookupFormatsForUrl(requestedUrl);
+  }
+}
+
+async function lookupTitlePrefill(requestedUrl: string): Promise<void> {
   try {
     const { authorName, title } = await api.lookupOembed(requestedUrl);
     if (form.title || form.url !== requestedUrl) return;
     form.title = title || authorName || (entryMode.value === "now" ? requestedUrl.trim() : "");
   } catch (err) {
     console.error("Failed to look up stream info for title prefill:", err);
+  }
+}
+
+// Best-effort formats probe: never blocks submission, and only swaps in the
+// probed picker once a real result arrives for the URL still in the field.
+// Never writes to form.quality itself, so a manual pill/dropdown pick the
+// user already made is never clobbered.
+async function lookupFormatsForUrl(requestedUrl: string): Promise<void> {
+  try {
+    const result = await api.lookupAvailableFormats(requestedUrl);
+    if (form.url !== requestedUrl || entryMode.value !== "now") return;
+    probedFormats.value = result;
+  } catch (err) {
+    console.error("Failed to look up available formats:", err);
   }
 }
 
@@ -792,6 +848,10 @@ function formatTimeInfo(rec: Recording): string {
 
 .quality label:hover {
   box-shadow: 2px 2px 0 var(--ink);
+}
+
+.quality-select {
+  margin-top: 8px;
 }
 
 .btn {

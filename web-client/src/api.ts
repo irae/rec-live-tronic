@@ -129,6 +129,21 @@ class ApiClient {
     return { authorName: data.author_name, title: data.title };
   }
 
+  async lookupAvailableFormats(
+    url: string
+  ): Promise<{ available: boolean; qualities: string[]; bestMatches: string | null }> {
+    const response = await fetch(`/recordings/formats?url=${encodeURIComponent(url)}`);
+    if (!response.ok) {
+      throw new Error("Failed to look up available formats");
+    }
+    const data = (await response.json()) as {
+      available: boolean;
+      qualities: string[];
+      best_matches: string | null;
+    };
+    return { available: data.available, qualities: data.qualities, bestMatches: data.best_matches };
+  }
+
   async permanentlyDeleteRecording(id: string): Promise<void> {
     const response = await fetch(`/recordings/${id}/trash`, { method: "DELETE" });
     if (!response.ok) {
