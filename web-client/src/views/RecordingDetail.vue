@@ -72,7 +72,7 @@
           <a v-if="recording.status === 'recorded'" class="btn btn--download" :href="downloadUrl">⬇ Download .ts</a>
 
           <div class="trash-row">
-            <button class="btn--trash" @click="askDelete" title="Moves this recording to Trash. It stays there for 30 days — restore it any time, or purge it for good from the Trash view.">🗑 Delete</button>
+            <button class="btn--trash" @click="handleDelete" title="Moves this recording to Trash. It stays there for 30 days — restore it any time, or purge it for good from the Trash view.">🗑 Delete</button>
             <span class="trash-note">Moves to Trash · restorable for 30 days</span>
           </div>
           <p v-if="deleteError" class="danger-error">{{ deleteError }}</p>
@@ -81,15 +81,6 @@
     </div>
 
     <div v-else class="loading">Loading...</div>
-
-    <ConfirmDialog
-      :is-open="showDeleteConfirm"
-      title="Delete recording"
-      :message="`Move “${recording?.title}” to Trash? It stays there for 30 days and can be restored, or purged for good from the Trash view.`"
-      confirm-label="Move to Trash"
-      @confirm="confirmDelete"
-      @cancel="showDeleteConfirm = false"
-    />
   </div>
 </template>
 
@@ -98,7 +89,9 @@ import { ref, watch, computed, onUnmounted, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import mpegts from "mpegts.js";
 import { api } from "../api";
-import ConfirmDialog from "../components/ConfirmDialog.vue";
+import { useToast } from "../composables/useToast";
+
+const { toast } = useToast();
 
 interface Recording {
   id: string;
@@ -125,7 +118,6 @@ const recordingId = computed(() => {
 
 const recording = ref<Recording | null>(null);
 const copyDone = ref(false);
-const showDeleteConfirm = ref(false);
 const deleteError = ref<string | null>(null);
 const editing = ref(false);
 const editSaving = ref(false);
@@ -257,20 +249,15 @@ function copyUrl(): void {
   }
 }
 
-function askDelete(): void {
-  deleteError.value = null;
-  showDeleteConfirm.value = true;
-}
-
-async function confirmDelete(): Promise<void> {
+async function handleDelete(): Promise<void> {
   if (!recordingId.value) return;
+  deleteError.value = null;
   try {
     await api.deleteRecordingFile(recordingId.value);
-    showDeleteConfirm.value = false;
+    toast("Moved to Trash");
     router.push({ name: "archive" });
   } catch (error) {
     console.error("Failed to delete recording:", error);
-    showDeleteConfirm.value = false;
     deleteError.value = error instanceof Error ? error.message : "Failed to delete recording";
   }
 }
@@ -301,6 +288,7 @@ async function saveEdit(): Promise<void> {
     recording.value = result.recording as unknown as Recording;
     document.title = `${recording.value.title} - RecTronic`;
     editing.value = false;
+    toast("Recording updated");
   } catch (error) {
     console.error("Failed to save recording edits:", error);
     editError.value = error instanceof Error ? error.message : "Failed to save changes";

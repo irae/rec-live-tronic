@@ -69,6 +69,9 @@
 import { ref, computed, onMounted, onUnmounted } from "vue";
 import { api, type Recording } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
+import { useToast } from "../composables/useToast";
+
+const { toast } = useToast();
 
 interface TrashedRecording extends Recording {
   trashedAt: string;
@@ -117,6 +120,7 @@ async function handleRestore(id: string): Promise<void> {
     error.value = null;
     await api.restoreRecording(id);
     trashedRecordings.value = trashedRecordings.value.filter((rec) => rec.id !== id);
+    toast("Recording restored");
   } catch (err) {
     console.error("Failed to restore recording:", err);
     error.value = err instanceof Error ? err.message : "Failed to restore recording";
@@ -139,6 +143,7 @@ async function confirmDeleteForever(): Promise<void> {
     error.value = null;
     await api.permanentlyDeleteRecording(id);
     trashedRecordings.value = trashedRecordings.value.filter((rec) => rec.id !== id);
+    toast("Deleted permanently");
   } catch (err) {
     console.error("Failed to permanently delete recording:", err);
     error.value = err instanceof Error ? err.message : "Failed to permanently delete recording";

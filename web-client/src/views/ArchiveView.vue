@@ -6,12 +6,22 @@
       <p class="lede">Every set you pulled off the stream, kept as a file you own. Newest at the top of the bill.</p>
     </section>
 
-    <p class="eyebrow">Recorded sets <span class="count">{{ recordings.length }}</span></p>
+    <div class="toolbar">
+      <p class="eyebrow">Recorded sets <span class="count">{{ recordings.length }}</span></p>
+      <button
+        type="button"
+        class="delete-toggle"
+        :class="{ 'delete-toggle--active': deleteMode }"
+        @click="deleteMode = !deleteMode"
+      >{{ deleteMode ? "Done" : "🗑 Quick delete" }}</button>
+    </div>
 
     <RecordingList
       :recordings="recordings"
       :empty-message="recordings.length === 0 ? 'No finished recordings yet.' : ''"
+      :delete-mode="deleteMode"
       @select="selectRecording"
+      @delete="handleDelete"
     />
   </div>
 </template>
@@ -21,6 +31,9 @@ import { ref, onMounted } from "vue";
 import { useRouter } from "vue-router";
 import { api } from "../api";
 import RecordingList from "../components/RecordingList.vue";
+import { useToast } from "../composables/useToast";
+
+const { toast } = useToast();
 
 interface Recording {
   id: string;
@@ -40,6 +53,7 @@ interface Recording {
 const router = useRouter();
 
 const recordings = ref<Recording[]>([]);
+const deleteMode = ref(false);
 
 onMounted(async () => {
   try {
@@ -52,6 +66,17 @@ onMounted(async () => {
 
 function selectRecording(id: string): void {
   router.push({ name: "detail", params: { id } });
+}
+
+async function handleDelete(id: string): Promise<void> {
+  try {
+    await api.deleteRecordingFile(id);
+    recordings.value = recordings.value.filter((rec) => rec.id !== id);
+    toast("Moved to Trash");
+  } catch (error) {
+    console.error("Failed to delete recording:", error);
+    toast(error instanceof Error ? error.message : "Failed to delete recording");
+  }
 }
 </script>
 
@@ -104,6 +129,13 @@ function selectRecording(id: string): void {
   animation: pulse 1.3s infinite;
 }
 
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 34px 0 16px;
+}
+
 .eyebrow {
   font-family: var(--mono);
   font-weight: 700;
@@ -114,7 +146,8 @@ function selectRecording(id: string): void {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin: 34px 0 16px;
+  margin: 0;
+  flex: 1;
 }
 
 .eyebrow::after {
@@ -126,6 +159,34 @@ function selectRecording(id: string): void {
 
 .eyebrow .count {
   color: var(--fluoro);
+}
+
+.delete-toggle {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 10.5px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: all .12s;
+}
+
+.delete-toggle:hover {
+  border-color: var(--fluoro);
+  color: var(--fluoro);
+  box-shadow: 2px 2px 0 var(--ink);
+  transform: translate(-1px, -1px);
+}
+
+.delete-toggle--active {
+  background: var(--fluoro);
+  border-color: var(--fluoro);
+  color: #fff;
 }
 
 @keyframes pulse {

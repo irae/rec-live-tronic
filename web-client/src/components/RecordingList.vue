@@ -6,7 +6,7 @@
         :key="recording.id"
         class="stub"
         href="#"
-        @click.prevent="$emit('select', recording.id)"
+        @click.prevent="deleteMode ? undefined : $emit('select', recording.id)"
       >
         <div class="stub-index">
           <span class="stg">{{ recording.stage || "Stage" }}<small>{{ stageSubtext }}</small></span>
@@ -21,7 +21,14 @@
           <div class="stub-foot">
             <span class="dur">{{ computeDuration(recording.startAt, recording.stopAt) }}</span>
             <span class="chip" :class="{ 'chip--hd': isHd(recording.quality) }">{{ recording.quality || "n/a" }}</span>
-            <span class="arrow">→</span>
+            <button
+              v-if="deleteMode"
+              type="button"
+              class="row-trash"
+              title="Move to Trash"
+              @click.stop.prevent="$emit('delete', recording.id)"
+            >🗑</button>
+            <span v-else class="arrow">→</span>
           </div>
         </div>
       </a>
@@ -55,15 +62,18 @@ const props = withDefaults(
     recordings: Recording[];
     emptyMessage?: string;
     stageSubtext?: string;
+    deleteMode?: boolean;
   }>(),
   {
     emptyMessage: "No recordings yet.",
     stageSubtext: "STAGE",
+    deleteMode: false,
   }
 );
 
 defineEmits<{
   select: [id: string];
+  delete: [id: string];
 }>();
 
 function extractFestival(title: string): string | null {
@@ -168,6 +178,25 @@ function isHd(quality: string): boolean {
 .chip--hd { color: var(--violet); border-color: var(--violet); }
 
 .arrow { font-family: var(--disp); font-size: 22px; color: var(--fluoro); line-height:1; }
+
+.row-trash {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  padding: 6px 9px;
+  cursor: pointer;
+  transition: all .12s;
+}
+
+.row-trash:hover {
+  border-color: var(--fluoro);
+  color: var(--fluoro);
+  box-shadow: 2px 2px 0 var(--ink);
+  transform: translate(-1px, -1px);
+}
 
 .empty-state {
   text-align: center;

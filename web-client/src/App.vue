@@ -26,6 +26,8 @@
       <span>RecTronic <span class="dot">●</span> personal stream recorder</span>
       <span id="footer-stats">recorded · scheduled</span>
     </footer>
+
+    <ToastHost />
   </div>
 </template>
 
@@ -33,6 +35,7 @@
 import { onMounted, onUnmounted } from "vue";
 import { useRoute } from "vue-router";
 import { api, diskSpace, isRecording } from "./api";
+import ToastHost from "./components/ToastHost.vue";
 
 const route = useRoute();
 
