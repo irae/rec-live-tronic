@@ -31,6 +31,10 @@ interface ApiError {
 // show it without a second poll loop.
 export const diskSpace = ref<DiskSpace | null>(null);
 
+// Same side-effect pattern as diskSpace: populated by any /recordings list
+// call, so App.vue's global poll keeps it current on every page.
+export const isRecording = ref(false);
+
 class ApiClient {
   private async fetchList(url: string, errorMessage: string): Promise<Recording[]> {
     const response = await fetch(url);
@@ -40,10 +44,14 @@ class ApiClient {
     }
     const data = (await response.json()) as {
       recordings: Recording[];
+      is_recording?: boolean;
       disk?: { actual_bytes: number; projected_bytes: number };
     };
     if (data.disk) {
       diskSpace.value = { actualBytes: data.disk.actual_bytes, projectedBytes: data.disk.projected_bytes };
+    }
+    if (typeof data.is_recording === "boolean") {
+      isRecording.value = data.is_recording;
     }
     return data.recordings;
   }
