@@ -3,18 +3,20 @@ import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadConfig } from "../../src/config.js";
+import { loadConfig, type Config } from "../../src/config.js";
 import { startServer, type RunningServer } from "../../src/server.js";
+import { openDatabase } from "../../src/db/connection.js";
 
 let root = "";
 let running: RunningServer;
+let config: Config;
 
 t.before(async () => {
   root = await mkdtemp(join(tmpdir(), "rec-live-tronic-server-"));
   const streamlink = join(root, "streamlink");
   await writeFile(streamlink, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   await chmod(streamlink, 0o755);
-  running = await startServer(loadConfig({
+  config = loadConfig({
     REC_LIVE_HOST: "127.0.0.1",
     REC_LIVE_PORT: "0",
     REC_LIVE_DATA_DIR: join(root, "state"),
@@ -22,7 +24,8 @@ t.before(async () => {
     REC_LIVE_PRIVATE_SOCKET: join(root, "run", "api.sock"),
     REC_LIVE_STREAMLINK_BIN: streamlink,
     REC_LIVE_OEMBED_ENDPOINT: "http://127.0.0.1:1/oembed",
-  }), "24.0.0");
+  });
+  running = await startServer(config, "24.0.0");
 });
 
 t.test("rejects unsupported Node.js versions before opening resources", async (t) => {
@@ -535,7 +538,7 @@ t.test("rejects trashing a recording that is not finished", async (t) => {
   t.equal(trashResponse.status, 409);
 });
 
-t.test("excludes trashed recordings from status-filtered listings", async (t) => {
+t.test("re-trashing an already-trashed recording is a no-op that does not reset its purge clock", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");
   if (!address || typeof address === "string") return;
@@ -544,8 +547,8 @@ t.test("excludes trashed recordings from status-filtered listings", async (t) =>
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
-      url: "https://www.youtube.com/watch?v=status-filter-trash",
-      title: "status filter trash",
+      url: "https://www.youtube.com/watch?v=re-trash-1",
+      title: "re-trash 1",
       start_at: "2099-01-01T00:00:00Z",
       stop_at: "2099-01-01T01:00:00Z",
     }),
@@ -566,9 +569,106 @@ t.test("excludes trashed recordings from status-filtered listings", async (t) =>
     expected_version: recordingBody.recording.version,
     status: "recorded",
   });
-  await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
-  const recordedList = await fetch(`${base}/recordings?status=recorded`);
-  const recordedBody = await recordedList.json() as { recordings: { id: string }[] };
-  const idsInRecorded = recordedBody.recordings.map((r) => r.id);
-  t.notOk(idsInRecorded.includes(id));
+  const firstTrash = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  t.equal(firstTrash.status, 204);
+
+  // Back-date trashed_at so a reset would be observable against "now".
+  const backdated = Date.now() - 5 * 24 * 60 * 60 * 1000;
+  const apiDatabase = openDatabase(config.databasePath);
+  try {
+    apiDatabase.prepare("UPDATE recordings SET trashed_at = ? WHERE id = ?").run(backdated, id);
+  } finally {
+    apiDatabase.close();
+  }
+
+  const secondTrash = await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+  t.equal(secondTrash.status, 204);
+
+  const afterSecondTrash = await fetch(`${base}/recordings/${id}`);
+  const afterSecondTrashBody = await afterSecondTrash.json() as { recording: { trashedAt: string | null } };
+  t.equal(afterSecondTrashBody.recording.trashedAt, new Date(backdated).toISOString());
+});
+
+t.test("purges only trash older than thirty days on the startup sweep", async (t) => {
+  const sweepRoot = await mkdtemp(join(tmpdir(), "rec-live-tronic-sweep-"));
+  const streamlink = join(sweepRoot, "streamlink");
+  await writeFile(streamlink, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(streamlink, 0o755);
+  const sweepConfig = loadConfig({
+    REC_LIVE_HOST: "127.0.0.1",
+    REC_LIVE_PORT: "0",
+    REC_LIVE_DATA_DIR: join(sweepRoot, "state"),
+    REC_LIVE_RECORDINGS_DIR: join(sweepRoot, "recordings"),
+    REC_LIVE_PRIVATE_SOCKET: join(sweepRoot, "run", "api.sock"),
+    REC_LIVE_STREAMLINK_BIN: streamlink,
+    REC_LIVE_OEMBED_ENDPOINT: "http://127.0.0.1:1/oembed",
+  });
+  let sweepServer = await startServer(sweepConfig, "24.0.0");
+  try {
+    function base(server: RunningServer): string {
+      const address = server.publicServer.address();
+      if (!address || typeof address === "string") throw new Error("No public listener");
+      return `http://127.0.0.1:${address.port}`;
+    }
+
+    async function createTrashedRecording(urlSuffix: string): Promise<string> {
+      const created = await fetch(`${base(sweepServer)}/recordings`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          url: `https://www.youtube.com/watch?v=${urlSuffix}`,
+          title: urlSuffix,
+          start_at: "2099-01-01T00:00:00Z",
+          stop_at: "2099-01-01T01:00:00Z",
+        }),
+      });
+      const createdBody = await created.json() as { recording: { id: string; version: number } };
+      const id = createdBody.recording.id;
+      const transitionPath = `/internal/recordings/${id}/transition`;
+      await privateRequest(join(sweepRoot, "run", "api.sock"), transitionPath, {
+        expected_status: "scheduled",
+        expected_version: createdBody.recording.version,
+        status: "recording",
+      });
+      const recording = await fetch(`${base(sweepServer)}/recordings/${id}`);
+      const recordingBody = await recording.json() as { recording: { version: number } };
+      await writeFile(join(sweepRoot, "recordings", `${id}.ts`), "test content");
+      await privateRequest(join(sweepRoot, "run", "api.sock"), transitionPath, {
+        expected_status: "recording",
+        expected_version: recordingBody.recording.version,
+        status: "recorded",
+      });
+      await fetch(`${base(sweepServer)}/recordings/${id}/file`, { method: "DELETE" });
+      return id;
+    }
+
+    const oldId = await createTrashedRecording("sweep-old");
+    const youngId = await createTrashedRecording("sweep-young");
+
+    const thirtyOneDaysAgo = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    const oneDayAgo = Date.now() - 1 * 24 * 60 * 60 * 1000;
+    const sweepDatabase = openDatabase(sweepConfig.databasePath);
+    try {
+      sweepDatabase.prepare("UPDATE recordings SET trashed_at = ? WHERE id = ?").run(thirtyOneDaysAgo, oldId);
+      sweepDatabase.prepare("UPDATE recordings SET trashed_at = ? WHERE id = ?").run(oneDayAgo, youngId);
+    } finally {
+      sweepDatabase.close();
+    }
+
+    await sweepServer.close();
+    sweepServer = await startServer(sweepConfig, "24.0.0");
+
+    const trashedList = await fetch(`${base(sweepServer)}/recordings?trashed=true`);
+    const trashedBody = await trashedList.json() as { recordings: { id: string }[] };
+    const idsInTrash = trashedBody.recordings.map((r) => r.id);
+    t.notOk(idsInTrash.includes(oldId), "recording trashed over thirty days ago is purged");
+    t.ok(idsInTrash.includes(youngId), "recording trashed under thirty days ago survives the sweep");
+
+    const { existsSync } = await import("node:fs");
+    t.equal(existsSync(join(sweepRoot, "recordings", `${oldId}.ts`)), false);
+    t.equal(existsSync(join(sweepRoot, "recordings", `${youngId}.ts`)), true);
+  } finally {
+    await sweepServer.close();
+    await rm(sweepRoot, { recursive: true, force: true });
+  }
 });

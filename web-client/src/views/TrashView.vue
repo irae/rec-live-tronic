@@ -99,13 +99,15 @@ async function fetchTrashed(): Promise<void> {
   }
 }
 
-onMounted(async () => {
-  await fetchTrashed();
-  const pollInterval = setInterval(fetchTrashed, 60_000);
+let pollInterval: ReturnType<typeof setInterval> | undefined;
 
-  onUnmounted(() => {
-    clearInterval(pollInterval);
-  });
+onMounted(() => {
+  fetchTrashed();
+  pollInterval = setInterval(fetchTrashed, 60_000);
+});
+
+onUnmounted(() => {
+  if (pollInterval) clearInterval(pollInterval);
 });
 
 async function handleRestore(id: string): Promise<void> {

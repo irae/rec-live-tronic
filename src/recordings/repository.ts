@@ -305,12 +305,9 @@ export class RecordingRepository {
     })();
   }
 
-  purge(id: string, tsPath: string): void {
-    this.database.transaction(() => {
-      const existing = this.getById(id);
-      if (existing === undefined) throw new Error(`Recording ${id} not found`);
-      this.database.prepare("DELETE FROM recordings WHERE id = ?").run(id);
-    })();
+  purge(id: string): boolean {
+    const result = this.database.prepare("DELETE FROM recordings WHERE id = ? AND trashed_at IS NOT NULL").run(id);
+    return result.changes > 0;
   }
 
   listTrashedOlderThan(millisecondsSinceEpoch: number): Recording[] {

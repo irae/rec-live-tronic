@@ -103,8 +103,8 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
         try {
           const stats = await statfs(config.recordingsDir);
           const actualBytes = stats.bavail * stats.bsize;
-          const recordingBytes = await recorder.getInProgressBytes();
-          result.disk = { actual_bytes: actualBytes, projected_bytes: Math.max(0, actualBytes - recordingBytes) };
+          const remainingBytes = await recorder.getProjectedRemainingBytes();
+          result.disk = { actual_bytes: actualBytes, projected_bytes: Math.max(0, actualBytes - remainingBytes) };
         } catch (error) {
           console.error("Failed to compute disk space:", error);
         }

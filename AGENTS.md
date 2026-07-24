@@ -61,7 +61,7 @@ Run the test suite (builds first, then runs tap):
 npm test
 ```
 
-All tests should pass (currently 55/55).
+All tests should pass (currently 104/104).
 
 ## Quick API Sanity Checks
 

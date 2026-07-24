@@ -101,16 +101,10 @@ export class RecorderService {
   }
 
   listRecordings(status?: unknown, filters?: { trashed?: boolean }): ReturnType<typeof mapRecording>[] {
-    if (status !== undefined && filters?.trashed !== undefined) {
-      return this.recordings.list({ status: requireStatus(status), trashed: filters.trashed }).map(mapRecording);
-    }
-    if (status !== undefined) {
-      return this.recordings.list({ status: requireStatus(status) }).map(mapRecording);
-    }
-    if (filters?.trashed !== undefined) {
-      return this.recordings.list({ trashed: filters.trashed }).map(mapRecording);
-    }
-    return this.recordings.list({}).map(mapRecording);
+    return this.recordings.list({
+      ...(status !== undefined ? { status: requireStatus(status) } : {}),
+      ...(filters?.trashed !== undefined ? { trashed: filters.trashed } : {}),
+    }).map(mapRecording);
   }
 
   getRecording(id: string): ReturnType<typeof mapRecording> {
@@ -204,29 +198,13 @@ export class RecorderService {
     if (basename(cookie.path) === id && cookie.path === join(this.config.cookiesDir, id)) await unlink(cookie.path).catch(() => undefined);
   }
 
-  async deleteRecording(id: string): Promise<void> {
-    const recording = this.recordings.getById(id);
-    if (!recording) throw new AppError("NOT_FOUND", 404, "Recording not found");
-    if (recording.status !== "recorded") throw new AppError("STATUS_CONFLICT", 409, "Only finished recordings can be deleted");
-    try {
-      await unlink(recording.tsPath);
-    } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        // File already missing, continue to delete row
-      } else {
-        console.error(`Failed to unlink recording file for ${id} (${recording.tsPath}):`, error);
-        throw new AppError("FILE_DELETE_ERROR", 500, "Failed to delete recording file");
-      }
-    }
-    this.recordings.delete(id);
-  }
-
   async trashRecording(id: string): Promise<void> {
     const recording = this.recordings.getById(id);
     if (!recording) throw new AppError("NOT_FOUND", 404, "Recording not found");
     if (recording.status !== "recorded") {
       throw new AppError("STATUS_CONFLICT", 409, "Only finished recordings can be trashed");
     }
+    if (recording.trashedAt !== null) return;
     const result = this.recordings.trash(id);
     if (result.outcome === "not_found") throw new AppError("NOT_FOUND", 404, "Recording not found");
   }
@@ -246,28 +224,37 @@ export class RecorderService {
     if (!recording) throw new AppError("NOT_FOUND", 404, "Recording not found");
     if (recording.trashedAt === null) throw new AppError("STATUS_CONFLICT", 409, "Only trashed recordings can be permanently deleted");
     try {
-      await unlink(recording.tsPath);
+      await this.purgeOne(recording);
     } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-        // File already missing, continue to delete row
-      } else {
-        console.error(`Failed to unlink recording file for ${id} (${recording.tsPath}):`, error);
-        throw new AppError("FILE_DELETE_ERROR", 500, "Failed to delete recording file");
-      }
+      console.error(`Failed to unlink recording file for ${id} (${recording.tsPath}):`, error);
+      throw new AppError("FILE_DELETE_ERROR", 500, "Failed to delete recording file");
     }
-    this.recordings.purge(id, recording.tsPath);
   }
 
-  async getInProgressBytes(): Promise<number> {
+  // Bytes still to be written by in-progress captures before they finish,
+  // estimated from each recording's own elapsed-rate. statfs's actual_free
+  // already reflects bytes written so far, so this must not double-count them.
+  async getProjectedRemainingBytes(): Promise<number> {
     const inProgress = this.recordings.list({ status: "recording" });
-    const sizes = await Promise.all(inProgress.map(async (recording) => {
+    const now = Date.now();
+    const remainders = await Promise.all(inProgress.map(async (recording) => {
+      let currentSize = 0;
       try {
-        return (await stat(recording.tsPath)).size;
-      } catch {
-        return 0;
+        currentSize = (await stat(recording.tsPath)).size;
+      } catch (error) {
+        if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+          console.error(`Failed to stat in-progress recording file for ${recording.id} (${recording.tsPath}):`, error);
+        }
       }
+      const startAtMs = toUnixMilliseconds(recording.startAt, "startAt");
+      const stopAtMs = toUnixMilliseconds(recording.stopAt, "stopAt");
+      const elapsedMs = now - startAtMs;
+      if (elapsedMs <= 0) return 0;
+      const rate = currentSize / elapsedMs;
+      const remainingMs = Math.max(0, stopAtMs - now);
+      return Math.max(0, rate * remainingMs);
     }));
-    return sizes.reduce((sum, size) => sum + size, 0);
+    return remainders.reduce((sum, remaining) => sum + remaining, 0);
   }
 
   async autoSweepTrash(thirtyDaysMs: number = 30 * 24 * 60 * 60 * 1000): Promise<void> {
@@ -275,16 +262,24 @@ export class RecorderService {
     const toDelete = this.recordings.listTrashedOlderThan(threshold);
     for (const recording of toDelete) {
       try {
-        await unlink(recording.tsPath);
+        await this.purgeOne(recording);
       } catch (error) {
-        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
-          // File already missing, continue to delete row
-        } else {
-          console.error(`Failed to unlink recording file during auto-sweep for ${recording.id} (${recording.tsPath}):`, error);
-        }
+        console.error(`Failed to unlink recording file during auto-sweep for ${recording.id} (${recording.tsPath}):`, error);
       }
-      this.recordings.purge(recording.id, recording.tsPath);
     }
+  }
+
+  // Shared by permanentDeleteRecording and autoSweepTrash. Purges the row only
+  // if the unlink succeeds (or the file was already gone), so an unlink
+  // failure leaves the row intact instead of orphaning the file. purge()
+  // itself only deletes rows still actually trashed, so a concurrent restore
+  // racing the unlink can't be undone by a purge that lands after it.
+  private async purgeOne(recording: Recording): Promise<void> {
+    await unlink(recording.tsPath).catch((error) => {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+      throw error;
+    });
+    this.recordings.purge(recording.id);
   }
 
   transition(input: { id: string; expected_status: unknown; expected_version: unknown; status: unknown; last_started_boot_id?: unknown; last_started_stop_at?: unknown }): ReturnType<typeof mapRecording> {

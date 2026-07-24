@@ -105,6 +105,10 @@ curl -X PATCH http://127.0.0.1:8787/recordings/rec-REPLACE_ME \
   -H 'content-type: application/json' -d '{"stop_at":"2026-07-21T22:30:00Z"}'
 curl -X DELETE http://127.0.0.1:8787/recordings/rec-REPLACE_ME
 curl http://127.0.0.1:8787/recordings/rec-REPLACE_ME/file  # VLC-openable URL for a finished recording
+curl -X DELETE http://127.0.0.1:8787/recordings/rec-REPLACE_ME/file  # moves a finished recording to trash (does not delete the file)
+curl -X POST http://127.0.0.1:8787/recordings/rec-REPLACE_ME/restore  # restores a trashed recording
+curl -X DELETE http://127.0.0.1:8787/recordings/rec-REPLACE_ME/trash  # permanently deletes a trashed recording's file and row
+curl 'http://127.0.0.1:8787/recordings?trashed=true'
 
 # Validation errors are structured and safe to show in scripts.
 curl -X POST http://127.0.0.1:8787/recordings -H 'content-type: application/json' \

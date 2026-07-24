@@ -78,7 +78,9 @@ export async function startServer(config: Config = loadConfig(), nodeVersion = p
     throw error;
   }
 
-  await recorder.autoSweepTrash();
+  await recorder.autoSweepTrash().catch((error: unknown) => {
+    console.error("Auto-sweep trash failed:", error);
+  });
   const dailySweepInterval = setInterval(() => {
     recorder.autoSweepTrash().catch((error: unknown) => {
       console.error("Auto-sweep trash failed:", error);
