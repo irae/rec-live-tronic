@@ -1,0 +1,580 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RecTronic — Cut workflow mockup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Anton&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap">
+<style>
+/* ============================================================
+   Tokens — copied verbatim from web-client/src/App.vue :root
+   ============================================================ */
+:root{
+  --paper:#E6E1D4; --paper-2:#DCD5C3;
+  --ink:#17142A; --ink-soft:#464056;
+  --fluoro:#FF3B1F; --violet:#5B2CE0; --violet-d:#4a20bf;
+  --line:#17142A;
+  --stub-r:7px;
+  --gap:clamp(14px,4vw,22px); --edge:clamp(16px,5vw,28px);
+  --sh:4px 4px 0 var(--ink); --sh-lift:6px 6px 0 var(--ink);
+  --disp:'Anton','Arial Narrow',sans-serif;
+  --ui:'Space Grotesk',system-ui,sans-serif;
+  --mono:'Space Mono',ui-monospace,monospace;
+}
+*{box-sizing:border-box;}
+html{-webkit-text-size-adjust:100%;overflow-x:hidden;}
+body{
+  margin:0; font-family:var(--ui); color:var(--ink);
+  background-color:var(--paper);
+  background-image:radial-gradient(var(--ink) 0.6px,transparent 0.7px);
+  background-size:7px 7px; background-position:0 0;
+  line-height:1.45; -webkit-font-smoothing:antialiased; overflow-x:hidden;
+}
+a{color:inherit;text-decoration:none;}
+.wrap{max-width:1240px;margin:0 auto;padding:0 var(--edge) 80px;}
+
+/* ---- mast / footer (from App.vue) ---- */
+.mast{
+  display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;
+  padding:16px var(--edge);border-bottom:2.5px solid var(--line);background:var(--paper);
+  position:sticky;top:0;z-index:40;
+  background-image:radial-gradient(var(--ink) 0.6px,transparent 0.7px);background-size:7px 7px;
+}
+.brand{font-family:var(--disp);font-size:26px;letter-spacing:.04em;text-transform:uppercase;
+  display:inline-flex;align-items:baseline;gap:9px;line-height:1;}
+.brand-accent{color:var(--fluoro);}
+.brand .dot{width:12px;height:12px;border-radius:50%;background:var(--fluoro);display:inline-block;
+  box-shadow:0 0 0 3px rgba(255,59,31,.25);align-self:center;}
+.brand small{font-family:var(--mono);font-size:10px;letter-spacing:.18em;color:var(--ink-soft);
+  text-transform:uppercase;font-weight:700;}
+.nav{display:flex;gap:6px;flex-shrink:0;}
+.nav a{font-family:var(--ui);font-weight:700;font-size:12.5px;text-transform:uppercase;letter-spacing:.08em;
+  padding:8px 13px;border:2px solid var(--line);background:var(--paper);
+  transition:transform .12s ease,box-shadow .12s ease,background .12s;cursor:pointer;}
+.nav a:hover{transform:translate(-2px,-2px);box-shadow:3px 3px 0 var(--ink);}
+.nav a[aria-current="page"]{background:var(--ink);color:var(--paper);}
+.foot{margin-top:60px;padding:18px var(--edge);border-top:2.5px solid var(--line);
+  font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);
+  display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;}
+.foot .dot{color:var(--fluoro);}
+
+/* ============================================================
+   Mockup harness — the "Simulate" strip. Clearly NOT app chrome.
+   ============================================================ */
+.sim{
+  position:sticky;top:0;z-index:60;background:var(--ink);color:var(--paper);
+  padding:10px var(--edge);display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  border-bottom:3px solid var(--fluoro);
+}
+.sim__tag{font-family:var(--mono);font-weight:700;font-size:10px;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--fluoro);border:1.5px solid var(--fluoro);padding:3px 8px;}
+.sim__label{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;opacity:.7;}
+.sim__btns{display:flex;gap:6px;flex-wrap:wrap;}
+.sim button{font-family:var(--mono);font-weight:700;font-size:10.5px;letter-spacing:.08em;text-transform:uppercase;
+  padding:6px 10px;border:2px solid var(--paper);background:transparent;color:var(--paper);cursor:pointer;transition:all .12s;}
+.sim button:hover{background:rgba(230,225,212,.15);}
+.sim button.active{background:var(--fluoro);border-color:var(--fluoro);color:#fff;}
+
+/* ============================================================
+   Detail layout (from RecordingDetail.vue)
+   ============================================================ */
+.recording-detail{padding:0;}
+.back{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-weight:700;font-size:11px;
+  letter-spacing:.14em;text-transform:uppercase;color:var(--ink-soft);margin:24px 0 0;}
+.back::before{content:"←";}
+.detail-grid{display:grid;gap:24px;grid-template-columns:minmax(0,1fr);margin-top:8px;}
+
+.player{position:relative;aspect-ratio:16/9;width:100%;border:2.5px solid var(--line);box-shadow:var(--sh);
+  background:repeating-linear-gradient(45deg,rgba(23,20,42,.04) 0 12px,transparent 12px 24px),
+    linear-gradient(150deg,#241f3d,#17142A 55%,#2a1550);
+  overflow:hidden;display:grid;place-items:center;}
+.player::before{content:"";position:absolute;inset:0;
+  background-image:radial-gradient(rgba(255,255,255,.10) 0.7px,transparent 0.8px);background-size:6px 6px;pointer-events:none;}
+.player .frame{position:absolute;top:12px;left:12px;right:12px;display:flex;justify-content:space-between;align-items:center;
+  font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.72);z-index:3;}
+.player .frame .rec{color:var(--fluoro);display:inline-flex;align-items:center;gap:6px;}
+.player .frame .rec .blip{width:8px;height:8px;border-radius:50%;background:var(--fluoro);animation:pulse 1.6s infinite;}
+.play-btn{position:relative;z-index:2;width:84px;height:84px;border-radius:50%;background:var(--fluoro);border:none;cursor:pointer;
+  display:grid;place-items:center;box-shadow:0 0 0 6px rgba(255,59,31,.22),6px 6px 0 rgba(0,0,0,.35);transition:transform .15s ease;}
+.play-btn:hover{transform:scale(1.06);}
+.play-btn::before{content:"";width:0;height:0;margin-left:6px;border-left:26px solid #fff;border-top:16px solid transparent;border-bottom:16px solid transparent;}
+
+.detail-title{font-family:var(--disp);text-transform:uppercase;font-weight:400;font-size:clamp(34px,10vw,66px);
+  line-height:.88;letter-spacing:.01em;margin:14px 0 0;}
+.detail-sub{display:flex;flex-wrap:wrap;gap:10px 14px;margin-top:12px;}
+.detail-sub .m{font-family:var(--mono);font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-soft);
+  display:inline-flex;align-items:center;gap:6px;}
+.detail-sub .m b{color:var(--ink);font-weight:700;}
+.col-info{min-width:0;}
+.eyebrow{font-family:var(--mono);font-weight:700;font-size:11px;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-soft);
+  display:flex;align-items:center;gap:10px;margin:0 0 12px 0;}
+.eyebrow::after{content:"";flex:1;height:2px;background:var(--line);}
+
+.btn{font-family:var(--ui);font-weight:700;font-size:13.5px;text-transform:uppercase;letter-spacing:.08em;
+  border:2.5px solid var(--line);border-radius:0;padding:12px 18px;cursor:pointer;text-decoration:none;
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;background:var(--paper);color:var(--ink);
+  transition:transform .12s ease,box-shadow .12s ease,background .12s;width:100%;}
+.btn:hover{transform:translate(-2px,-2px);box-shadow:4px 4px 0 var(--ink);}
+.btn--download{margin-top:20px;background:var(--paper);color:var(--violet);border-color:var(--violet);}
+.btn--download:hover{background:var(--violet);color:#fff;box-shadow:4px 4px 0 var(--ink);}
+
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1);}50%{opacity:.35;transform:scale(.7);}}
+
+@media(min-width:900px){
+  .detail-grid{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr);align-items:start;}
+  .detail-grid .col-media{grid-column:1;}
+  .detail-grid .col-info{grid-column:2;position:sticky;top:120px;}
+}
+
+/* ============================================================
+   NEW — the Cut workflow signature elements
+   Built inside the established language: dashed provisional
+   cards (from TrashView .crate / RecordingDetail .danger),
+   mono labels, fluoro/violet accents. No new colors or type.
+   ============================================================ */
+
+/* --- state visibility --- */
+.state{display:none;}
+.state.on{display:block;}
+
+/* --- cut console: the mark-picking toolbar under the player --- */
+.cutbar{margin-top:14px;border:2.5px solid var(--line);box-shadow:var(--sh);background:var(--paper);}
+.cutbar__head{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;
+  padding:11px 14px;border-bottom:2.5px solid var(--line);background:var(--ink);color:var(--paper);}
+.cutbar__head .lbl{font-family:var(--mono);font-weight:700;font-size:11px;letter-spacing:.18em;text-transform:uppercase;
+  display:inline-flex;align-items:center;gap:8px;}
+.cutbar__head .lbl b{color:var(--fluoro);}
+/* mode toggle mirrors ScheduleView .entry-toggle */
+.modes{display:inline-flex;border:2px solid var(--paper);}
+.modes button{font-family:var(--mono);font-weight:700;font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;
+  padding:5px 12px;background:transparent;color:var(--paper);border:none;cursor:pointer;}
+.modes button+button{border-left:2px solid var(--paper);}
+.modes button.active{background:var(--fluoro);color:#fff;}
+.cutbar__body{padding:26px 14px 14px;}
+
+/* timeline w/ playhead + cue markers */
+.tl{position:relative;height:46px;border:2px solid var(--line);background:var(--paper-2);overflow:visible;
+  background-image:repeating-linear-gradient(90deg,rgba(23,20,42,.10) 0 1px,transparent 1px 44px);}
+.tl__keep{position:absolute;top:0;bottom:0;background:rgba(91,44,224,.20);border-left:3px solid var(--violet);border-right:3px solid var(--violet);}
+.tl__cut{position:absolute;top:-4px;bottom:-4px;width:0;border-left:3px dashed var(--fluoro);}
+.tl__cut::after{content:"✂";position:absolute;top:-16px;left:-7px;color:var(--fluoro);font-size:12px;}
+.tl__head{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink);}
+.tl__head::before{content:"";position:absolute;top:-6px;left:-5px;border:6px solid transparent;border-top-color:var(--ink);}
+.tl__cue{position:absolute;top:0;bottom:0;width:0;border-left:3px solid var(--violet);}
+.tl__cue span{position:absolute;top:-17px;font-family:var(--mono);font-weight:700;font-size:9px;letter-spacing:.1em;color:var(--violet);white-space:nowrap;}
+.tl__cue--in span{left:2px;}
+.tl__cue--out span{right:2px;}
+
+.tl-scale{display:flex;justify-content:space-between;font-family:var(--mono);font-size:9px;letter-spacing:.08em;
+  color:var(--ink-soft);margin-top:6px;text-transform:uppercase;}
+
+.cue-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;align-items:center;}
+.pill{font-family:var(--mono);font-weight:700;font-size:11px;letter-spacing:.06em;text-transform:uppercase;
+  border:2px solid var(--line);background:var(--paper);padding:8px 12px;cursor:pointer;color:var(--ink);
+  display:inline-flex;align-items:center;gap:6px;transition:all .12s;}
+.pill:hover{transform:translate(-1px,-1px);box-shadow:2px 2px 0 var(--ink);}
+.pill--violet{border-color:var(--violet);color:var(--violet);}
+.pill .k{color:var(--fluoro);}
+.cue-readout{font-family:var(--mono);font-size:11px;letter-spacing:.04em;color:var(--ink-soft);margin-left:auto;}
+.cue-readout b{color:var(--ink);}
+.cue-hint{font-family:var(--mono);font-size:10.5px;letter-spacing:.03em;color:var(--ink-soft);margin:12px 0 0;}
+.cut-primary{margin-top:14px;background:var(--fluoro);color:#fff;border-color:var(--fluoro);}
+.cut-primary:hover{background:var(--fluoro);box-shadow:4px 4px 0 var(--ink);}
+
+/* --- processing overlay --- */
+.proc{position:absolute;inset:0;z-index:4;display:grid;place-items:center;background:rgba(23,20,42,.78);}
+.proc__inner{text-align:center;color:#fff;}
+.proc__inner .big{font-family:var(--disp);text-transform:uppercase;font-size:clamp(26px,6vw,40px);line-height:.9;letter-spacing:.02em;}
+.proc__inner .sub{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:rgba(255,255,255,.7);margin-top:12px;}
+.proc__bar{width:220px;max-width:60vw;height:8px;margin:16px auto 0;background:rgba(255,255,255,.18);overflow:hidden;border:1px solid rgba(255,255,255,.3);}
+.proc__bar i{display:block;height:100%;width:40%;background:var(--fluoro);animation:march 1.1s linear infinite;}
+@keyframes march{0%{transform:translateX(-120%);}100%{transform:translateX(320%);}}
+
+/* --- collapsed original strip (preview state) --- */
+.orig{border:2px solid var(--ink-soft);background:var(--paper);margin-bottom:16px;}
+.orig__bar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 13px;cursor:pointer;}
+.orig__bar .l{font-family:var(--mono);font-weight:700;font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-soft);
+  display:inline-flex;align-items:center;gap:8px;}
+.orig__bar .l .caret{transition:transform .15s;}
+.orig__bar .toggle{font-family:var(--mono);font-weight:700;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--violet);}
+/* kept alive but collapsed: height:0 / overflow:hidden, per the owner's sketch */
+.orig__body{height:0;overflow:hidden;transition:height .2s;}
+.orig.open .orig__body{height:auto;padding:0 13px 13px;}
+.orig.open .caret{transform:rotate(90deg);}
+.orig__body .player{aspect-ratio:16/9;max-width:420px;}
+
+/* --- cutting room: provisional preview cards --- */
+.room-note{font-family:var(--mono);font-size:10.5px;letter-spacing:.03em;color:var(--ink-soft);margin:-4px 0 14px;}
+.cuts{display:grid;gap:16px;}
+@media(min-width:760px){.cuts--split{grid-template-columns:1fr 1fr;}}
+.cutcard{border:2.5px dashed var(--fluoro);background:repeating-linear-gradient(45deg,rgba(255,59,31,.055) 0 10px,transparent 10px 20px);
+  padding:14px;display:grid;gap:11px;}
+.cutcard__top{display:flex;align-items:center;justify-content:space-between;gap:10px;}
+.cutcard__no{font-family:var(--mono);font-weight:700;font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--fluoro);
+  display:inline-flex;align-items:center;gap:7px;}
+.cutcard__span{font-family:var(--mono);font-size:10.5px;letter-spacing:.04em;color:var(--ink-soft);}
+.cutcard__span b{color:var(--ink);}
+.mini{position:relative;aspect-ratio:16/9;border:2px solid var(--line);overflow:hidden;display:grid;place-items:center;
+  background:repeating-linear-gradient(45deg,rgba(23,20,42,.04) 0 12px,transparent 12px 24px),linear-gradient(150deg,#241f3d,#17142A 55%,#2a1550);}
+.mini::before{content:"";position:absolute;inset:0;background-image:radial-gradient(rgba(255,255,255,.10) 0.7px,transparent 0.8px);background-size:6px 6px;}
+.mini .play-btn{width:54px;height:54px;box-shadow:0 0 0 4px rgba(255,59,31,.22),4px 4px 0 rgba(0,0,0,.35);}
+.mini .play-btn::before{border-left:17px solid #fff;border-top:10px solid transparent;border-bottom:10px solid transparent;margin-left:4px;}
+.mini__tag{position:absolute;top:9px;left:9px;font-family:var(--mono);font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:rgba(255,255,255,.72);z-index:2;}
+.keepthis{display:inline-flex;align-items:center;gap:7px;font-family:var(--mono);font-weight:700;font-size:10px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-soft);cursor:pointer;user-select:none;}
+.keepthis input{accent-color:var(--violet);width:15px;height:15px;}
+
+/* preview action row */
+.review{margin-top:20px;border-top:2.5px dashed var(--fluoro);padding-top:16px;
+  display:flex;gap:10px;flex-wrap:wrap;align-items:center;}
+.review .note{font-family:var(--mono);font-size:10.5px;letter-spacing:.03em;color:var(--ink-soft);margin-right:auto;max-width:34ch;}
+.rbtn{font-family:var(--ui);font-weight:700;font-size:13px;text-transform:uppercase;letter-spacing:.08em;border:2.5px solid var(--line);
+  padding:11px 20px;cursor:pointer;background:var(--paper);color:var(--ink);display:inline-flex;align-items:center;gap:8px;
+  transition:transform .12s,box-shadow .12s,background .12s;}
+.rbtn:hover{transform:translate(-2px,-2px);box-shadow:4px 4px 0 var(--ink);}
+.rbtn--discard{border-color:var(--ink-soft);color:var(--ink-soft);}
+.rbtn--keep{background:var(--violet);color:#fff;border-color:var(--violet);}
+.rbtn--keep:hover{background:var(--violet-d);box-shadow:4px 4px 0 var(--ink);}
+
+/* --- lineage: "Cut from" surfaced on a promoted recording --- */
+.lineage{margin-top:18px;border:2px solid var(--violet);background:var(--paper);padding:12px 14px;
+  display:flex;gap:10px;align-items:flex-start;flex-wrap:wrap;}
+.lineage .ic{font-size:15px;color:var(--violet);line-height:1.2;}
+.lineage .txt{font-family:var(--mono);font-size:11.5px;letter-spacing:.02em;color:var(--ink-soft);min-width:0;}
+.lineage .txt b{color:var(--ink);font-weight:700;}
+.lineage a{color:var(--violet);text-decoration:underline;text-underline-offset:3px;text-decoration-style:dotted;font-weight:700;white-space:nowrap;}
+/* reciprocal note on the source recording */
+.recut{margin-top:14px;border:2px dashed var(--ink-soft);background:var(--paper);padding:11px 14px;
+  font-family:var(--mono);font-size:11px;letter-spacing:.02em;color:var(--ink-soft);}
+.recut b{color:var(--ink);}
+.recut a{color:var(--violet);text-decoration:underline;text-underline-offset:3px;text-decoration-style:dotted;font-weight:700;}
+
+/* --- archive stub w/ cut badge (from RecordingList .stub) --- */
+.arch-eyebrow{margin-top:34px;}
+.lineup{display:grid;gap:14px;}
+@media(min-width:1100px){.lineup{grid-template-columns:1fr 1fr;}}
+.stub{position:relative;display:grid;grid-template-columns:74px minmax(0,1fr);background:var(--paper);border:2.5px solid var(--line);
+  box-shadow:var(--sh);overflow:hidden;transition:transform .13s ease,box-shadow .13s ease;cursor:pointer;}
+.stub:hover{transform:translate(-3px,-3px);box-shadow:var(--sh-lift);}
+.stub:hover .stub-index{background:var(--fluoro);color:var(--paper);}
+.stub-index{background:var(--ink);color:var(--paper);display:flex;flex-direction:column;align-items:center;justify-content:center;
+  gap:3px;padding:10px 4px;font-family:var(--disp);text-transform:uppercase;transition:background .13s;position:relative;}
+.stub-index .stg{font-size:20px;line-height:.85;letter-spacing:.02em;}
+.stub-index .stg small{display:block;font-family:var(--mono);font-size:8px;letter-spacing:.12em;opacity:.8;margin-top:4px;}
+.stub-index::after{content:"";position:absolute;top:0;right:-1px;bottom:0;width:14px;
+  background:radial-gradient(circle at right,var(--paper) var(--stub-r),transparent calc(var(--stub-r) + 0.5px));
+  background-size:14px 18px;background-repeat:repeat-y;}
+.stub-body{padding:13px 15px 13px 16px;min-width:0;}
+.stub-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-soft);margin-bottom:4px;}
+.stub-title{font-family:var(--disp);font-weight:400;text-transform:uppercase;font-size:clamp(20px,6.2vw,30px);line-height:.95;
+  letter-spacing:.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.stub-foot{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:9px;}
+.dur{font-family:var(--mono);font-weight:700;font-size:14px;letter-spacing:.05em;color:var(--ink);}
+.dur::before{content:"⏱ ";color:var(--fluoro);font-size:12px;}
+.chip{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;padding:3px 8px;border:1.5px solid var(--line);}
+.chip--hd{color:var(--violet);border-color:var(--violet);}
+/* NEW badge — the visible marker that a stub is a cut, reusing chip language */
+.chip--cut{color:var(--violet);border-color:var(--violet);border-style:dashed;}
+.arrow{font-family:var(--disp);font-size:22px;color:var(--fluoro);line-height:1;}
+
+.section-gap{margin-top:40px;}
+.sub-eyebrow{font-family:var(--mono);font-weight:700;font-size:10px;letter-spacing:.2em;text-transform:uppercase;color:var(--ink-soft);margin:22px 0 10px;}
+</style>
+</head>
+<body>
+
+<!-- ===== Mockup harness: state switcher (not part of the app) ===== -->
+<div class="sim">
+  <span class="sim__tag">Mockup</span>
+  <span class="sim__label">Simulate the flow →</span>
+  <div class="sim__btns">
+    <button data-go="mark" class="active">1 · Mark</button>
+    <button data-go="proc">2 · Processing</button>
+    <button data-go="prevTrim">3 · Preview (trim)</button>
+    <button data-go="prevSplit">3′ · Preview (split)</button>
+    <button data-go="promoted">4 · Promoted</button>
+  </div>
+</div>
+
+<!-- ===== App chrome ===== -->
+<header class="mast">
+  <span class="brand"><span class="brand-accent">Rec</span>Tronic<span class="dot"></span><small>rec · set</small></span>
+  <nav class="nav">
+    <a>Archive</a><a>Schedule</a><a>Trash</a>
+  </nav>
+</header>
+
+<main class="wrap">
+<div class="recording-detail">
+<a class="back">Back to lineup</a>
+
+<!-- ============================================================
+     STATE 1 — MARK: player + cut console
+     ============================================================ -->
+<section class="state on" id="mark">
+  <div class="detail-grid">
+    <div class="col-media">
+      <div class="player">
+        <div class="frame"><span>Tomorrowland 2026 · Mainstage</span><span class="rec"><span class="blip"></span>archived</span></div>
+        <button class="play-btn" aria-label="Play"></button>
+      </div>
+
+      <!-- NEW: the cut console -->
+      <div class="cutbar">
+        <div class="cutbar__head">
+          <span class="lbl">✂ <b>Cut</b> &nbsp;·&nbsp; drop cue points</span>
+          <div class="modes">
+            <button class="active" data-mode="trim">Trim</button>
+            <button data-mode="split">Split</button>
+          </div>
+        </div>
+        <div class="cutbar__body">
+
+          <!-- TRIM config: keep one range between an IN and OUT cue -->
+          <div id="modeTrim">
+            <div class="tl">
+              <div class="tl__keep" style="left:34%;right:22%;"></div>
+              <div class="tl__cue tl__cue--in" style="left:34%;"><span>CUE IN 42:10</span></div>
+              <div class="tl__cue tl__cue--out" style="left:78%;"><span>CUE OUT 1:15:30</span></div>
+              <div class="tl__head" style="left:58%;"></div>
+            </div>
+            <div class="tl-scale"><span>0:00</span><span>0:59</span><span>1:58:44</span></div>
+            <div class="cue-row">
+              <button class="pill pill--violet"><span class="k">[</span> Cue in</button>
+              <button class="pill pill--violet">Cue out <span class="k">]</span></button>
+              <span class="cue-readout">Keeping <b>42:10 → 1:15:30</b> · <b>33:20</b></span>
+            </div>
+            <p class="cue-hint">Scrub to a spot and drop <b>Cue in</b> / <b>Cue out</b>. The violet band is the piece you keep — everything outside it is dropped.</p>
+          </div>
+
+          <!-- SPLIT config: N cut lines → N+1 pieces -->
+          <div id="modeSplit" style="display:none;">
+            <div class="tl">
+              <div class="tl__cut" style="left:35%;"></div>
+              <div class="tl__head" style="left:58%;"></div>
+            </div>
+            <div class="tl-scale"><span>0:00</span><span>0:59</span><span>1:58:44</span></div>
+            <div class="cue-row">
+              <button class="pill pill--violet"><span class="k">✂</span> Drop cut</button>
+              <span class="cue-readout"><b>1</b> cut · makes <b>2</b> pieces</span>
+            </div>
+            <p class="cue-hint">Scrub and <b>Drop cut</b> at each break. Every cut line splits the set into one more piece — 2 cuts make 3 pieces, and so on.</p>
+          </div>
+
+          <button class="btn cut-primary">✂ Make the cut</button>
+        </div>
+      </div>
+
+      <h1 class="detail-title">HALŌ<br>Mainstage Closing</h1>
+      <div class="detail-sub">
+        <span class="m">Duration <b>1:58:44</b></span>
+        <span class="m">Quality <b>1080p</b></span>
+        <span class="m">Recorded <b>Jul 20, 2026</b></span>
+      </div>
+    </div>
+
+    <div class="col-info">
+      <p class="eyebrow">Stream URL</p>
+      <p class="cue-hint" style="margin-top:0">Point VLC or any player at the source, or open the cut console on the left to trim or split this set into new recordings.</p>
+      <a class="btn btn--download">⬇ Download .ts</a>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     STATE 2 — PROCESSING
+     ============================================================ -->
+<section class="state" id="proc">
+  <div class="detail-grid">
+    <div class="col-media">
+      <div class="player">
+        <div class="frame"><span>Tomorrowland 2026 · Mainstage</span><span class="rec"><span class="blip"></span>archived</span></div>
+        <div class="proc">
+          <div class="proc__inner">
+            <div class="big">Making<br>the cut…</div>
+            <div class="proc__bar"><i></i></div>
+            <div class="sub">ffmpeg -c copy · no re-encode · a few seconds</div>
+          </div>
+        </div>
+      </div>
+      <h1 class="detail-title">HALŌ<br>Mainstage Closing</h1>
+      <div class="detail-sub"><span class="m">Duration <b>1:58:44</b></span><span class="m">Quality <b>1080p</b></span></div>
+    </div>
+    <div class="col-info">
+      <p class="eyebrow">Working</p>
+      <p class="cue-hint" style="margin-top:0">Slicing the source into your rough cut. Nothing is saved to the Archive yet — you'll get to preview and keep it next.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================
+     STATE 3 — PREVIEW (TRIM): one cut
+     ============================================================ -->
+<section class="state" id="prevTrim">
+  <!-- collapsed-but-alive original -->
+  <div class="orig" id="origTrim">
+    <div class="orig__bar" data-orig="origTrim">
+      <span class="l"><span class="caret">▸</span> Original · HALŌ Mainstage Closing <b style="color:var(--ink-soft)">— still open, paused</b></span>
+      <span class="toggle">Show</span>
+    </div>
+    <div class="orig__body">
+      <div class="player"><div class="frame"><span>Original · 1:58:44</span><span class="rec"><span class="blip"></span>source</span></div><button class="play-btn"></button></div>
+    </div>
+  </div>
+
+  <p class="eyebrow">Cutting room</p>
+  <p class="room-note">One rough cut, ready to review — nothing saved to the Archive until you keep it.</p>
+
+  <div class="cuts">
+    <div class="cutcard">
+      <div class="cutcard__top">
+        <span class="cutcard__no">✂ The cut</span>
+        <span class="cutcard__span"><b>42:10 → 1:15:30</b> · 33:20</span>
+      </div>
+      <div class="mini"><span class="mini__tag">rough cut · preview</span><button class="play-btn"></button></div>
+    </div>
+  </div>
+
+  <div class="review">
+    <span class="note">Keep it and it joins the Archive as its own recording, linked back to this source. Discard and the rough cut is thrown away — the original is untouched either way.</span>
+    <button class="rbtn rbtn--discard">✕ Discard</button>
+    <button class="rbtn rbtn--keep">✓ Keep</button>
+  </div>
+</section>
+
+<!-- ============================================================
+     STATE 3′ — PREVIEW (SPLIT): two cuts, per-cut keep
+     ============================================================ -->
+<section class="state" id="prevSplit">
+  <div class="orig" id="origSplit">
+    <div class="orig__bar" data-orig="origSplit">
+      <span class="l"><span class="caret">▸</span> Original · HALŌ Mainstage Closing <b style="color:var(--ink-soft)">— still open, paused</b></span>
+      <span class="toggle">Show</span>
+    </div>
+    <div class="orig__body">
+      <div class="player"><div class="frame"><span>Original · 1:58:44</span><span class="rec"><span class="blip"></span>source</span></div><button class="play-btn"></button></div>
+    </div>
+  </div>
+
+  <p class="eyebrow">Cutting room</p>
+  <p class="room-note">Two rough cuts from one split — review both, keep the ones you want. Uncheck a cut to leave it behind.</p>
+
+  <div class="cuts cuts--split">
+    <div class="cutcard">
+      <div class="cutcard__top"><span class="cutcard__no">✂ Cut 1</span><span class="cutcard__span"><b>0:00 → 42:10</b> · 42:10</span></div>
+      <div class="mini"><span class="mini__tag">rough cut · preview</span><button class="play-btn"></button></div>
+      <label class="keepthis"><input type="checkbox" checked> Keep this cut</label>
+    </div>
+    <div class="cutcard">
+      <div class="cutcard__top"><span class="cutcard__no">✂ Cut 2</span><span class="cutcard__span"><b>42:10 → 1:58:44</b> · 1:16:34</span></div>
+      <div class="mini"><span class="mini__tag">rough cut · preview</span><button class="play-btn"></button></div>
+      <label class="keepthis"><input type="checkbox" checked> Keep this cut</label>
+    </div>
+  </div>
+
+  <div class="review">
+    <span class="note">Kept cuts join the Archive as their own recordings, each linked back to this source. Discard throws away both rough cuts — the original is untouched either way.</span>
+    <button class="rbtn rbtn--discard">✕ Discard both</button>
+    <button class="rbtn rbtn--keep">✓ Keep selected</button>
+  </div>
+</section>
+
+<!-- ============================================================
+     STATE 4 — PROMOTED: real recording + lineage, + archive rows + source's reciprocal note
+     ============================================================ -->
+<section class="state" id="promoted">
+  <div class="detail-grid">
+    <div class="col-media">
+      <div class="player">
+        <div class="frame"><span>Cut of HALŌ · Mainstage</span><span class="rec"><span class="blip"></span>archived</span></div>
+        <button class="play-btn"></button>
+      </div>
+      <h1 class="detail-title">HALŌ<br>Mainstage Closing<br><span style="font-size:.5em">(the drop)</span></h1>
+      <div class="detail-sub">
+        <span class="m">Duration <b>33:20</b></span>
+        <span class="m">Quality <b>1080p</b></span>
+        <span class="m">Kept <b>Jul 23, 2026</b></span>
+      </div>
+
+      <!-- lineage: how the "Cut from" link surfaces on a promoted recording -->
+      <div class="lineage">
+        <span class="ic">✂</span>
+        <span class="txt">Cut from <b>HALŌ — Mainstage Closing</b> · 42:10 → 1:15:30 &nbsp; <a>See original ↗</a></span>
+      </div>
+    </div>
+
+    <div class="col-info">
+      <p class="eyebrow">Stream URL</p>
+      <p class="cue-hint" style="margin-top:0">A kept cut is a first-class recording — served, downloadable, and itself re-cuttable, exactly like a live capture. The only extra is the line above, pointing home to its source.</p>
+      <a class="btn btn--download">⬇ Download .ts</a>
+    </div>
+  </div>
+
+  <!-- how it reads in the Archive lineup -->
+  <p class="eyebrow arch-eyebrow">In the Archive</p>
+  <div class="lineup">
+    <div class="stub">
+      <div class="stub-index"><span class="stg">MAIN<small>STAGE</small></span></div>
+      <div class="stub-body">
+        <div class="stub-meta"><span>Tomorrowland 2026</span><span>·</span><span>Jul 23</span></div>
+        <div class="stub-title">HALŌ — The Drop</div>
+        <div class="stub-foot"><span class="dur">0:33:20</span><span class="chip chip--cut">✂ Cut</span><span class="chip chip--hd">1080p</span><span class="arrow">→</span></div>
+      </div>
+    </div>
+    <div class="stub">
+      <div class="stub-index"><span class="stg">MAIN<small>STAGE</small></span></div>
+      <div class="stub-body">
+        <div class="stub-meta"><span>Tomorrowland 2026</span><span>·</span><span>Jul 20</span></div>
+        <div class="stub-title">HALŌ — Mainstage Closing</div>
+        <div class="stub-foot"><span class="dur">1:58:44</span><span class="chip chip--hd">1080p</span><span class="arrow">→</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- the reciprocal side: the source shows what came out of it -->
+  <p class="sub-eyebrow">…and back on the source recording</p>
+  <div class="recut">↻ <b>Re-cut into 1 recording</b> — HALŌ — The Drop &nbsp; <a>See cuts ↗</a></div>
+</section>
+
+</div>
+</main>
+
+<footer class="foot">
+  <span>RecTronic <span class="dot">●</span> personal stream recorder</span>
+  <span>cut workflow · design mockup</span>
+</footer>
+
+<script>
+// State switcher — vanilla, no build step (mirrors design-prototypes/theme-3).
+var states = document.querySelectorAll('.state');
+var simBtns = document.querySelectorAll('.sim [data-go]');
+function go(id){
+  states.forEach(function(s){ s.classList.toggle('on', s.id === id); });
+  simBtns.forEach(function(b){ b.classList.toggle('active', b.dataset.go === id); });
+  window.scrollTo({top:0});
+}
+simBtns.forEach(function(b){ b.addEventListener('click', function(){ go(b.dataset.go); }); });
+
+// Trim/Split mode toggle inside the cut console
+document.querySelectorAll('.modes [data-mode]').forEach(function(b){
+  b.addEventListener('click', function(){
+    document.querySelectorAll('.modes [data-mode]').forEach(function(x){ x.classList.toggle('active', x===b); });
+    document.getElementById('modeTrim').style.display = b.dataset.mode === 'trim' ? '' : 'none';
+    document.getElementById('modeSplit').style.display = b.dataset.mode === 'split' ? '' : 'none';
+  });
+});
+
+// Collapsed original: expand/collapse (player stays in the DOM, height:0 when closed)
+document.querySelectorAll('[data-orig]').forEach(function(bar){
+  bar.addEventListener('click', function(){
+    var box = document.getElementById(bar.dataset.orig);
+    var open = box.classList.toggle('open');
+    bar.querySelector('.toggle').textContent = open ? 'Hide' : 'Show';
+  });
+});
+</script>
+</body>
+</html>

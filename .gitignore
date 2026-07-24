@@ -156,3 +156,5 @@ playwright/.cache/
 design-prototypes/*
 # ...except the winning theme, kept as a reference artifact
 !design-prototypes/theme-3/
+# ...and the cut (trim/split) workflow mockup, kept as a design reference
+!design-prototypes/cut-workflow/
