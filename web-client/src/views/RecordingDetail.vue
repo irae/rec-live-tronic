@@ -50,14 +50,33 @@
           <span v-if="isIos || isMac" class="vlc-note"> — optional, best-effort, may not always work without VLC's URL handler registered</span>
         </div>
 
-        <a v-if="recording.status === 'recorded'" class="btn btn--download" :href="downloadUrl">⬇ Download .ts</a>
-
-        <div class="danger">
-          <h3>◆ Remove recording</h3>
-          <p>Moves this recording to Trash. It stays there for 30 days — restore it any time, or purge it for good from the Trash view.</p>
-          <p v-if="deleteError" class="danger-error">{{ deleteError }}</p>
-          <button class="btn btn--danger" @click="askDelete">🗑 Delete recording</button>
+        <div v-if="recording.status === 'recorded' && editing" class="edit-panel">
+          <p class="eyebrow">Edit details</p>
+          <div class="edit-field">
+            <label for="edit-title">Title</label>
+            <input id="edit-title" class="input" type="text" v-model="editForm.title" />
+          </div>
+          <div class="edit-field">
+            <label for="edit-stage">Stage</label>
+            <input id="edit-stage" class="input" type="text" v-model="editForm.stage" placeholder="optional label" />
+          </div>
+          <p v-if="editError" class="edit-error">{{ editError }}</p>
+          <div class="edit-buttons">
+            <button class="tbtn tbtn--save" @click="saveEdit" :disabled="editSaving || !editForm.title.trim()">{{ editSaving ? "Saving…" : "Save" }}</button>
+            <button class="tbtn" @click="cancelEdit" :disabled="editSaving">Cancel</button>
+          </div>
         </div>
+
+        <template v-else>
+          <button v-if="recording.status === 'recorded'" class="btn btn--edit" @click="startEdit">✎ Edit details</button>
+          <a v-if="recording.status === 'recorded'" class="btn btn--download" :href="downloadUrl">⬇ Download .ts</a>
+
+          <div class="trash-row">
+            <button class="btn--trash" @click="askDelete" title="Moves this recording to Trash. It stays there for 30 days — restore it any time, or purge it for good from the Trash view.">🗑 Delete</button>
+            <span class="trash-note">Moves to Trash · restorable for 30 days</span>
+          </div>
+          <p v-if="deleteError" class="danger-error">{{ deleteError }}</p>
+        </template>
       </div>
     </div>
 
@@ -108,6 +127,10 @@ const recording = ref<Recording | null>(null);
 const copyDone = ref(false);
 const showDeleteConfirm = ref(false);
 const deleteError = ref<string | null>(null);
+const editing = ref(false);
+const editSaving = ref(false);
+const editError = ref<string | null>(null);
+const editForm = ref({ title: "", stage: "" });
 
 const streamUrl = computed(() => {
   if (!recordingId.value) return "";
@@ -178,6 +201,8 @@ watch(
   async (id) => {
     destroyPlayer();
     recording.value = null;
+    editing.value = false;
+    editError.value = null;
     if (typeof id !== "string") return;
     try {
       recording.value = await api.getRecording(id);
@@ -247,6 +272,40 @@ async function confirmDelete(): Promise<void> {
     console.error("Failed to delete recording:", error);
     showDeleteConfirm.value = false;
     deleteError.value = error instanceof Error ? error.message : "Failed to delete recording";
+  }
+}
+
+function startEdit(): void {
+  if (!recording.value) return;
+  editForm.value = { title: recording.value.title, stage: recording.value.stage ?? "" };
+  editError.value = null;
+  editing.value = true;
+}
+
+function cancelEdit(): void {
+  editing.value = false;
+  editError.value = null;
+}
+
+async function saveEdit(): Promise<void> {
+  if (!recordingId.value || !recording.value) return;
+  const title = editForm.value.title.trim();
+  if (!title) {
+    editError.value = "Title is required";
+    return;
+  }
+  editSaving.value = true;
+  editError.value = null;
+  try {
+    const result = await api.patchRecording(recordingId.value, { title, stage: editForm.value.stage.trim() });
+    recording.value = result.recording as unknown as Recording;
+    document.title = `${recording.value.title} - RecTronic`;
+    editing.value = false;
+  } catch (error) {
+    console.error("Failed to save recording edits:", error);
+    editError.value = error instanceof Error ? error.message : "Failed to save changes";
+  } finally {
+    editSaving.value = false;
   }
 }
 
@@ -586,32 +645,125 @@ function formatStatus(status: string): string {
   letter-spacing: .06em;
 }
 
-.danger {
-  margin-top: 30px;
-  border: 2.5px dashed var(--fluoro);
+.edit-panel {
+  margin-top: 20px;
+  border: 2.5px solid var(--violet);
   padding: 16px;
-  background:
-    repeating-linear-gradient(45deg, rgba(255,59,31,.055) 0 10px, transparent 10px 20px);
+  background: var(--paper-2);
 }
 
-.danger h3 {
+.edit-field {
+  margin-bottom: 12px;
+}
+
+.edit-field label {
+  display: block;
   font-family: var(--mono);
   font-weight: 700;
   font-size: 11px;
-  letter-spacing: .18em;
+  letter-spacing: .1em;
   text-transform: uppercase;
-  color: var(--fluoro);
-  margin: 0 0 4px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  color: var(--ink-soft);
+  margin-bottom: 6px;
 }
 
-.danger p {
+.input {
+  width: 100%;
+  font-family: var(--ui);
+  font-size: 14px;
+  padding: 10px 12px;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink);
+}
+
+.input:focus {
+  outline: none;
+  border-color: var(--violet);
+}
+
+.edit-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.tbtn {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  padding: 8px 14px;
+  cursor: pointer;
+  color: var(--ink);
+  transition: all .12s;
+}
+
+.tbtn:hover:not(:disabled) {
+  box-shadow: 2px 2px 0 var(--ink);
+  transform: translate(-1px, -1px);
+}
+
+.tbtn:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.tbtn--save {
+  border-color: var(--violet);
+  color: var(--violet);
+}
+
+.tbtn--save:hover:not(:disabled) {
+  background: var(--violet);
+  color: #fff;
+}
+
+.edit-error {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 12px;
+  color: var(--fluoro);
   margin: 0 0 12px;
-  font-size: 13px;
+}
+
+.trash-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 24px;
+}
+
+.btn--trash {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  border: 2px solid var(--line);
+  background: var(--paper);
   color: var(--ink-soft);
-  max-width: 46ch;
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: all .12s;
+}
+
+.btn--trash:hover {
+  border-color: var(--fluoro);
+  color: var(--fluoro);
+  box-shadow: 2px 2px 0 var(--ink);
+  transform: translate(-1px, -1px);
+}
+
+.trash-note {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: .06em;
+  color: #8b8598;
 }
 
 .danger-error {
@@ -656,14 +808,15 @@ function formatStatus(status: string): string {
   box-shadow: 1px 1px 0 var(--ink);
 }
 
-.btn--danger {
-  background: var(--paper);
-  color: var(--fluoro);
-  border-color: var(--fluoro);
+.btn--edit {
+  margin-top: 20px;
+  background: var(--violet);
+  color: #fff;
+  border-color: var(--violet);
 }
 
-.btn--danger:hover {
-  background: var(--fluoro);
+.btn--edit:hover {
+  background: var(--violet-d);
   color: #fff;
   box-shadow: 4px 4px 0 var(--ink);
 }
