@@ -35,6 +35,18 @@ t.before(async () => {
   const ffmpeg = join(root, "ffmpeg");
   await writeFile(ffmpeg, ffmpegStubScript, { mode: 0o755 });
   await chmod(ffmpeg, 0o755);
+  // UserSystemdClient spawns "systemctl"/"systemd-run" by bare name (resolved
+  // via PATH, not a config-provided path like streamlink/ffmpeg above), so a
+  // dev machine or CI runner with no real systemd (e.g. macOS) would hit
+  // `spawn systemctl ENOENT` the moment a test stops/relaunches a running
+  // recording's unit. Stub both onto PATH the same way.
+  const systemctl = join(root, "systemctl");
+  await writeFile(systemctl, "#!/bin/sh\ncase \"$2\" in\n  is-active) exit 3 ;;\nesac\nexit 0\n", { mode: 0o755 });
+  await chmod(systemctl, 0o755);
+  const systemdRun = join(root, "systemd-run");
+  await writeFile(systemdRun, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+  await chmod(systemdRun, 0o755);
+  process.env.PATH = `${root}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`;
   config = loadConfig({
     REC_LIVE_HOST: "127.0.0.1",
     REC_LIVE_PORT: "0",
@@ -1170,6 +1182,47 @@ async function seedRecordedRecording(base: string, title: string): Promise<strin
   await privateRequest(join(root, "run", "api.sock"), transitionPath, { expected_status: "recording", expected_version: mid.recording.version, status: "recorded" });
   return id;
 }
+
+t.test("allows editing metadata and stop_at, but not quality or start_at, on a running recording", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ url: "https://www.youtube.com/watch?v=running-metadata-edit", title: "before edit", start_at: "2099-01-01T00:00:00Z", stop_at: "2099-01-01T01:00:00Z" }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  await privateRequest(join(root, "run", "api.sock"), `/internal/recordings/${id}/transition`, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+
+  const metadataResponse = await fetch(`${base}/recordings/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ title: "renamed mid-capture", stage: "Main Stage", artist: "Live Artist", venue: "Live Venue", event: "Live Event", stop_at: "2099-01-01T02:00:00Z" }),
+  });
+  t.equal(metadataResponse.status, 200);
+  const fetched = await (await fetch(`${base}/recordings/${id}`)).json() as {
+    recording: { title: string; stage: string | null; artist: string | null; venue: string | null; event: string | null; stopAt: string; status: string };
+  };
+  t.equal(fetched.recording.title, "renamed mid-capture");
+  t.equal(fetched.recording.stage, "Main Stage");
+  t.equal(fetched.recording.artist, "Live Artist");
+  t.equal(fetched.recording.venue, "Live Venue");
+  t.equal(fetched.recording.event, "Live Event");
+  t.equal(fetched.recording.stopAt, "2099-01-01T02:00:00.000Z");
+  t.equal(fetched.recording.status, "recording");
+
+  const qualityResponse = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ quality: "480p" }) });
+  t.equal(qualityResponse.status, 409);
+  const startResponse = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ start_at: "2099-01-01T00:30:00Z" }) });
+  t.equal(startResponse.status, 409);
+});
 
 t.test("edits title and stage on a finished recording via PATCH", async (t) => {
   const address = running.publicServer.address();

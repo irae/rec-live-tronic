@@ -430,7 +430,11 @@ export class RecorderService {
     if (existing.status === "scheduled") {
       if (toUnixMilliseconds(existing.startAt, "start_at") <= now) throw new AppError("STATUS_CONFLICT", 409, "Only future scheduled recordings can be changed");
     } else if (existing.status === "recording") {
-      if (patch.title !== undefined || patch.stage !== undefined || patch.artist !== undefined || patch.venue !== undefined || patch.event !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined) throw new AppError("STATUS_CONFLICT", 409, "Running recordings may only change stop_at");
+      // quality and start_at are locked in mid-capture (streamlink already
+      // launched with that quality; the actual start already happened) --
+      // everything else, including stop_at (the one live control value),
+      // is fair game while a recording is running.
+      if (patch.quality !== undefined || patch.startAt !== undefined) throw new AppError("STATUS_CONFLICT", 409, "Running recordings may only change title, stage, artist, venue, event, or stop_at");
     } else if (existing.status === "recorded") {
       if (patch.quality !== undefined) throw new AppError("STATUS_CONFLICT", 409, "Finished recordings may only change title, stage, artist, venue, event, start_at, or stop_at");
     } else throw new AppError("STATUS_CONFLICT", 409, "Recording cannot be changed in its current status");
