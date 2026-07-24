@@ -40,18 +40,19 @@ function stageFromTitle(title: string): string | null {
   return parts[1] ?? null;
 }
 
-// Best-effort YouTube channel name via the public oEmbed endpoint; the stage
+// Best-effort YouTube metadata via the public oEmbed endpoint; the stage
 // column stays null on any failure so recording creation never depends on this
 // network call. The endpoint is config so functional tests point it off-network.
-async function stageFromChannel(endpoint: string, url: string): Promise<string | null> {
+async function fetchOembedMetadata(endpoint: string, url: string): Promise<{ authorName: string | null; title: string | null }> {
   try {
     const response = await fetch(`${endpoint}?url=${encodeURIComponent(url)}&format=json`, { signal: AbortSignal.timeout(2_500) });
-    if (!response.ok) return null;
-    const author = (await response.json() as { author_name?: unknown }).author_name;
-    if (typeof author !== "string" || !author.trim()) return null;
-    return author.trim().slice(0, 200);
+    if (!response.ok) return { authorName: null, title: null };
+    const data = await response.json() as { author_name?: unknown; title?: unknown };
+    const author = typeof data.author_name === "string" && data.author_name.trim() ? data.author_name.trim().slice(0, 200) : null;
+    const title = typeof data.title === "string" && data.title.trim() ? data.title.trim().slice(0, 500) : null;
+    return { authorName: author, title };
   } catch {
-    return null;
+    return { authorName: null, title: null };
   }
 }
 
@@ -96,7 +97,8 @@ export class RecorderService {
     const id = recordingId();
     const title = text(input.title, "title");
     const url = validateUrl(input.url);
-    const stage = stageFromTitle(title) ?? await stageFromChannel(this.config.oembedEndpoint, url);
+    const oembed = await fetchOembedMetadata(this.config.oembedEndpoint, url);
+    const stage = stageFromTitle(title) ?? oembed.authorName;
     return mapRecording(this.recordings.create({ id, url, title, stage, cookieId: cookieIdValue, quality: qualityValue, startAt, stopAt, unitName: `${id}.service`, tsPath: join(this.config.recordingsDir, `${id}.ts`) }));
   }
 
@@ -113,10 +115,10 @@ export class RecorderService {
     return mapRecording(recording);
   }
 
-  getRecordingFile(id: string): { status: RecordingStatus; tsPath: string } {
+  getRecordingFile(id: string): { status: RecordingStatus; tsPath: string; title: string } {
     const recording = this.recordings.getById(id);
     if (!recording) throw new AppError("NOT_FOUND", 404, "Recording not found");
-    return { status: recording.status, tsPath: recording.tsPath };
+    return { status: recording.status, tsPath: recording.tsPath, title: recording.title };
   }
 
   async patchRecording(id: string, input: RecordingPatch): Promise<{ recording: ReturnType<typeof mapRecording>; runtime_updated?: boolean; relaunched?: boolean; stop?: { attempted: true; confirmed: boolean } }> {
@@ -185,6 +187,16 @@ export class RecorderService {
       }
       throw error;
     }
+  }
+
+  async getOembedMetadata(url: string): Promise<{ author_name: string | null; title: string | null }> {
+    try {
+      validateUrl(url);
+    } catch {
+      throw new AppError("VALIDATION_ERROR", 400, "url must be an HTTPS YouTube URL");
+    }
+    const oembed = await fetchOembedMetadata(this.config.oembedEndpoint, url);
+    return { author_name: oembed.authorName, title: oembed.title };
   }
 
   listCookies(): CookieMetadata[] { return this.cookies.list(); }

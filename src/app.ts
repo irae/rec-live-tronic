@@ -42,6 +42,17 @@ type MulterFactory = ((options: { storage: unknown; limits: { fileSize: number; 
 const require = createRequire(import.meta.url);
 const multer = require("multer") as MulterFactory;
 
+function sanitizeFilename(title: string): string {
+  // Replace unsafe characters and collapse whitespace
+  const sanitized = title
+    .replace(/[^a-zA-Z0-9._\- ]/g, "") // Remove non-ASCII-safe characters
+    .replace(/\s+/g, " ") // Collapse multiple spaces
+    .trim()
+    .slice(0, 200); // Reasonable length cap
+  // Append .ts extension
+  return sanitized ? `${sanitized}.ts` : "";
+}
+
 function errorHandler(error: unknown, _request: Request, response: Response, _next: NextFunction): void {
   if (error instanceof AppError) {
     response.status(error.status).json({ error: { code: error.code, message: error.message } });
@@ -112,6 +123,14 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
       response.json(result);
     } catch (error) { next(error); }
   });
+  app.get("/recordings/oembed", async (request, response, next) => {
+    try {
+      const url = request.query.url;
+      if (typeof url !== "string") throw new AppError("VALIDATION_ERROR", 400, "url is required");
+      const metadata = await recorder.getOembedMetadata(url);
+      response.json(metadata);
+    } catch (error) { next(error); }
+  });
   app.get("/recordings/:id", (request, response, next) => {
     try { response.json({ recording: recorder.getRecording(request.params.id) }); } catch (error) { next(error); }
   });
@@ -123,7 +142,7 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
   });
   app.get("/recordings/:id/file", (request, response, next) => {
     try {
-      const { status, tsPath } = recorder.getRecordingFile(request.params.id);
+      const { status, tsPath, title } = recorder.getRecordingFile(request.params.id);
       if (status !== "recorded") throw new AppError("STATUS_CONFLICT", 409, "Recording file is not ready to stream");
       // Without an explicit root, send's dotfile check inspects every segment
       // of the full absolute path (not just the part under recordingsDir), so
@@ -131,7 +150,13 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
       // treated as a dotfile and 404s internally. Production's recordingsDir
       // (/srv/rec-live-tronic/recordings) has no dot segments, but allow them
       // explicitly since this path is server-constructed, not user input.
-      response.sendFile(tsPath, { headers: { "Content-Type": "video/mp2t" }, dotfiles: "allow" }, (error) => {
+      const headers: { "Content-Type": string; "Content-Disposition"?: string } = { "Content-Type": "video/mp2t" };
+      if (request.query.download === "1") {
+        const sanitized = sanitizeFilename(title);
+        const filename = sanitized || `${request.params.id}.ts`;
+        headers["Content-Disposition"] = `attachment; filename="${filename}"`;
+      }
+      response.sendFile(tsPath, { headers, dotfiles: "allow" }, (error) => {
         if (error) next(error);
       });
     } catch (error) { next(error); }
