@@ -14,7 +14,7 @@ const qualityValues = ["best", "1080p", "720p", "480p", "360p", "worst"] as cons
 const allowedYouTubeHosts = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"]);
 
 type RecordingInput = { url: unknown; title?: unknown; artist?: unknown; venue?: unknown; event?: unknown; stage?: unknown; cookie_id?: unknown; quality?: unknown; start_at: unknown; stop_at: unknown };
-type RecordingPatch = { title?: unknown; stage?: unknown; quality?: unknown; start_at?: unknown; stop_at?: unknown };
+type RecordingPatch = { title?: unknown; stage?: unknown; artist?: unknown; venue?: unknown; event?: unknown; quality?: unknown; start_at?: unknown; stop_at?: unknown };
 
 function text(value: unknown, field: string, limit = 500): string {
   if (typeof value !== "string" || !value.trim() || value.length > limit) throw new AppError("VALIDATION_ERROR", 400, `${field} must be a non-empty string`);
@@ -184,9 +184,12 @@ export class RecorderService {
     const existing = this.recordings.getById(id);
     if (!existing) throw new AppError("NOT_FOUND", 404, "Recording not found");
     if (Object.keys(input).length === 0) throw new AppError("VALIDATION_ERROR", 400, "At least one mutable field is required");
-    const patch: { title?: string; stage?: string | null; quality?: string; startAt?: string; stopAt?: string } = {};
+    const patch: { title?: string; stage?: string | null; artist?: string | null; venue?: string | null; event?: string | null; quality?: string; startAt?: string; stopAt?: string } = {};
     if (input.title !== undefined) patch.title = text(input.title, "title");
     if (input.stage !== undefined) patch.stage = input.stage === null || (typeof input.stage === "string" && input.stage.trim() === "") ? null : text(input.stage, "stage", 200);
+    if (input.artist !== undefined) patch.artist = input.artist === null || (typeof input.artist === "string" && input.artist.trim() === "") ? null : text(input.artist, "artist", 200);
+    if (input.venue !== undefined) patch.venue = input.venue === null || (typeof input.venue === "string" && input.venue.trim() === "") ? null : text(input.venue, "venue", 200);
+    if (input.event !== undefined) patch.event = input.event === null || (typeof input.event === "string" && input.event.trim() === "") ? null : text(input.event, "event", 200);
     if (input.quality !== undefined) patch.quality = quality(input.quality);
     if (input.start_at !== undefined) patch.startAt = instant(input.start_at, "start_at");
     if (input.stop_at !== undefined) patch.stopAt = instant(input.stop_at, "stop_at");
@@ -194,9 +197,9 @@ export class RecorderService {
     if (existing.status === "scheduled") {
       if (toUnixMilliseconds(existing.startAt, "start_at") <= now) throw new AppError("STATUS_CONFLICT", 409, "Only future scheduled recordings can be changed");
     } else if (existing.status === "recording") {
-      if (patch.title !== undefined || patch.stage !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined) throw new AppError("STATUS_CONFLICT", 409, "Running recordings may only change stop_at");
+      if (patch.title !== undefined || patch.stage !== undefined || patch.artist !== undefined || patch.venue !== undefined || patch.event !== undefined || patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt === undefined) throw new AppError("STATUS_CONFLICT", 409, "Running recordings may only change stop_at");
     } else if (existing.status === "recorded") {
-      if (patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt !== undefined) throw new AppError("STATUS_CONFLICT", 409, "Finished recordings may only change title or stage");
+      if (patch.quality !== undefined || patch.startAt !== undefined || patch.stopAt !== undefined) throw new AppError("STATUS_CONFLICT", 409, "Finished recordings may only change title, stage, artist, venue, or event");
     } else throw new AppError("STATUS_CONFLICT", 409, "Recording cannot be changed in its current status");
     const effectiveStart = patch.startAt ?? existing.startAt;
     const effectiveStop = patch.stopAt ?? existing.stopAt;

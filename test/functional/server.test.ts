@@ -1167,6 +1167,56 @@ t.test("clears stage when PATCHed with an empty stage on a finished recording", 
   t.equal(after.recording.stage, null);
 });
 
+t.test("edits artist, venue, and event on a finished recording via PATCH", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await seedRecordedRecording(base, "metadata edit target");
+  const patched = await fetch(`${base}/recordings/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ artist: "New Artist", venue: "New Venue", event: "New Event" }),
+  });
+  t.equal(patched.status, 200);
+  const fetched = await (await fetch(`${base}/recordings/${id}`)).json() as {
+    recording: { artist: string | null; venue: string | null; event: string | null };
+  };
+  t.equal(fetched.recording.artist, "New Artist");
+  t.equal(fetched.recording.venue, "New Venue");
+  t.equal(fetched.recording.event, "New Event");
+});
+
+t.test("leaves the title unchanged when editing metadata fields on a finished recording", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await seedRecordedRecording(base, "title should stay put");
+  const patched = await fetch(`${base}/recordings/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ artist: "Recomposed?", venue: "Nope", event: "Still nope", stage: "Still nope too" }),
+  });
+  t.equal(patched.status, 200);
+  const fetched = await (await fetch(`${base}/recordings/${id}`)).json() as { recording: { title: string } };
+  t.equal(fetched.recording.title, "title should stay put");
+});
+
+t.test("still rejects editing start/stop/quality on a finished recording", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await seedRecordedRecording(base, "immutable-window metadata recording");
+  for (const patch of [{ start_at: "2099-01-01T00:30:00Z" }, { stop_at: "2099-01-01T02:00:00Z" }, { quality: "480p" }]) {
+    const response = await fetch(`${base}/recordings/${id}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(patch) });
+    t.equal(response.status, 409);
+    const body = await response.json() as { error: { code: string } };
+    t.equal(body.error.code, "STATUS_CONFLICT");
+  }
+});
+
 t.test("reports is_recording true only while a recording is active", async (t) => {
   // Runs against its own isolated server (rather than the shared `running`
   // instance) because earlier tests in this suite leave lingering rows in

@@ -57,6 +57,18 @@
             <input id="edit-title" class="input" type="text" v-model="editForm.title" />
           </div>
           <div class="edit-field">
+            <label for="edit-artist">Artist</label>
+            <input id="edit-artist" class="input" type="text" v-model="editForm.artist" placeholder="optional label" />
+          </div>
+          <div class="edit-field">
+            <label for="edit-venue">Venue</label>
+            <input id="edit-venue" class="input" type="text" v-model="editForm.venue" placeholder="optional label" />
+          </div>
+          <div class="edit-field">
+            <label for="edit-event">Event</label>
+            <input id="edit-event" class="input" type="text" v-model="editForm.event" placeholder="optional label" />
+          </div>
+          <div class="edit-field">
             <label for="edit-stage">Stage</label>
             <input id="edit-stage" class="input" type="text" v-model="editForm.stage" placeholder="optional label" />
           </div>
@@ -130,7 +142,7 @@ const deleteError = ref<string | null>(null);
 const editing = ref(false);
 const editSaving = ref(false);
 const editError = ref<string | null>(null);
-const editForm = ref({ title: "", stage: "" });
+const editForm = ref({ title: "", stage: "", artist: "", venue: "", event: "" });
 
 const streamUrl = computed(() => {
   if (!recordingId.value) return "";
@@ -277,7 +289,13 @@ async function confirmDelete(): Promise<void> {
 
 function startEdit(): void {
   if (!recording.value) return;
-  editForm.value = { title: recording.value.title, stage: recording.value.stage ?? "" };
+  editForm.value = {
+    title: recording.value.title,
+    stage: recording.value.stage ?? "",
+    artist: recording.value.artist ?? "",
+    venue: recording.value.venue ?? "",
+    event: recording.value.event ?? "",
+  };
   editError.value = null;
   editing.value = true;
 }
@@ -297,7 +315,13 @@ async function saveEdit(): Promise<void> {
   editSaving.value = true;
   editError.value = null;
   try {
-    const result = await api.patchRecording(recordingId.value, { title, stage: editForm.value.stage.trim() });
+    const result = await api.patchRecording(recordingId.value, {
+      title,
+      stage: editForm.value.stage.trim(),
+      artist: editForm.value.artist.trim(),
+      venue: editForm.value.venue.trim(),
+      event: editForm.value.event.trim(),
+    });
     recording.value = result.recording as unknown as Recording;
     document.title = `${recording.value.title} - RecTronic`;
     editing.value = false;
