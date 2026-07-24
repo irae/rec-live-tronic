@@ -2,7 +2,7 @@
   <div class="recording-detail">
     <a class="back" href="#" @click.prevent="goBack">Back to lineup</a>
 
-    <div v-if="recording" class="detail-grid">
+    <div v-if="recording" class="detail-grid" :class="{ 'detail-grid--cut-open': cutOpen }">
       <!-- MEDIA -->
       <div class="col-media">
         <div v-if="recording.status === 'recorded'" class="orig" :class="{ 'orig--collapsed': playerCollapsed }">
@@ -37,14 +37,6 @@
           </div>
         </div>
 
-        <CutConsole
-          v-if="recording.status === 'recorded' && recordingId"
-          :recording-id="recordingId"
-          :get-current-time="getCurrentTime"
-          @phase-change="onCutPhaseChange"
-          @kept="onCutKept"
-        />
-
         <h1 class="detail-title">{{ recording.title }}<br></h1>
 
         <div class="detail-sub">
@@ -75,7 +67,7 @@
       <div class="col-info">
         <p class="eyebrow">Stream URL</p>
         <div class="urlbar">
-          <code id="streamurl">{{ streamUrl }}</code>
+          <code id="streamurl">{{ friendlyStreamUrl }}</code>
           <button class="copy" @click="copyUrl" :class="{ done: copyDone }">{{ copyDone ? "Copied ✓" : "Copy" }}</button>
         </div>
         <div class="vlc-line">
@@ -114,6 +106,16 @@
 
         <template v-else>
           <button v-if="recording.status === 'recorded'" class="btn btn--edit" @click="startEdit">✎ Edit details</button>
+
+          <CutConsole
+            v-if="recording.status === 'recorded' && recordingId"
+            :recording-id="recordingId"
+            :recording="recording"
+            :get-current-time="getCurrentTime"
+            @phase-change="onCutPhaseChange"
+            @kept="onCutKept"
+          />
+
           <a v-if="recording.status === 'recorded'" class="btn btn--download" :href="downloadUrl">⬇ Download .ts</a>
 
           <div class="trash-row">
@@ -137,6 +139,9 @@ import { api, type Recording as ApiRecording } from "../api";
 import { useToast } from "../composables/useToast";
 import CutConsole from "../components/CutConsole.vue";
 import { formatOffsetSeconds } from "../lib/cut-offsets";
+import { fileUrl } from "../lib/file-url";
+import { isIosDevice, isMacDevice, vlcUrlFor } from "../lib/vlc";
+import { copyText } from "../lib/copy";
 
 const { toast } = useToast();
 
@@ -191,29 +196,42 @@ function getCurrentTime(): number | null {
   return videoEl.value ? videoEl.value.currentTime : null;
 }
 
+const cutPhase = ref<"mark" | "processing" | "preview" | "closed">("closed");
+const cutOpen = computed(() => cutPhase.value !== "closed");
+
 function onCutPhaseChange(phase: "mark" | "processing" | "preview" | "closed"): void {
+  cutPhase.value = phase;
   playerCollapsed.value = phase === "preview";
 }
 
-async function onCutKept(kept: ApiRecording[]): Promise<void> {
+// Every successful Keep renames-and-trashes the source (see spec.md), so
+// staying on this page would show a now-stale view. Jump straight to the
+// one new recording, or to the Archive when a split kept several.
+function onCutKept(kept: ApiRecording[]): void {
   toast(kept.length === 1 ? "Kept 1 cut" : `Kept ${kept.length} cuts`);
-  if (recordingId.value) {
-    try {
-      derivedRecordings.value = await api.listCutFrom(recordingId.value);
-    } catch (error) {
-      console.error("Failed to refresh derived recordings:", error);
-    }
+  if (kept.length === 1 && kept[0]) {
+    router.push({ name: "detail", params: { id: kept[0].id } });
+  } else {
+    router.push({ name: "archive" });
   }
 }
 
+// Plain (no friendly-filename segment) URL for the embedded mpegts.js/<video>
+// player -- the friendly form only matters for VLC/copy-URL/external players,
+// which key off the URL path rather than the Content-Disposition header.
 const streamUrl = computed(() => {
   if (!recordingId.value) return "";
   return `${window.location.origin}/recordings/${recordingId.value}/file`;
 });
 
+const friendlyStreamUrl = computed(() => {
+  if (!recordingId.value || !recording.value) return "";
+  return fileUrl(recordingId.value, recording.value.title);
+});
+
 const downloadUrl = computed(() => {
-  if (!recordingId.value) return "";
-  return `${window.location.origin}/recordings/${recordingId.value}/file?download=1`;
+  if (!recordingId.value || !recording.value) return "";
+  return fileUrl(recordingId.value, recording.value.title, { download: true });
 });
 
 // mpegts.js's own supportability check (MSE availability etc). Falls back to
@@ -254,21 +272,9 @@ function setupPlayer(): void {
   player.load();
 }
 
-const isIos = computed(() => {
-  return /iPad|iPhone|iPod/.test(navigator.userAgent);
-});
-
-// iPadOS 13+ Safari reports its userAgent as a plain Mac, so exclude the
-// touch-capable "MacIntel" case (real Macs aren't multi-touch) to avoid
-// mistaking an iPad for a desktop Mac.
-const isMac = computed(() => {
-  return !isIos.value && /Macintosh|Mac OS X/.test(navigator.userAgent) && navigator.maxTouchPoints <= 1;
-});
-
-const vlcUrl = computed(() => {
-  if (isMac.value) return `vlc://${streamUrl.value}`;
-  return `vlc-x-callback://x-callback-url/stream?url=${encodeURIComponent(streamUrl.value)}`;
-});
+const isIos = computed(() => isIosDevice());
+const isMac = computed(() => isMacDevice());
+const vlcUrl = computed(() => vlcUrlFor(friendlyStreamUrl.value));
 
 watch(
   () => route.params.id,
@@ -278,6 +284,7 @@ watch(
     editing.value = false;
     editError.value = null;
     playerCollapsed.value = false;
+    cutPhase.value = "closed";
     sourceRecording.value = null;
     derivedRecordings.value = [];
     if (typeof id !== "string") return;
@@ -316,18 +323,6 @@ function goBack(): void {
   router.push({ name: "archive" });
 }
 
-function legacyCopy(text: string): boolean {
-  const textarea = document.createElement("textarea");
-  textarea.value = text;
-  textarea.style.position = "fixed";
-  textarea.style.opacity = "0";
-  document.body.appendChild(textarea);
-  textarea.select();
-  const copied = document.execCommand("copy");
-  document.body.removeChild(textarea);
-  return copied;
-}
-
 function showCopied(): void {
   copyDone.value = true;
   setTimeout(() => {
@@ -335,16 +330,8 @@ function showCopied(): void {
   }, 1600);
 }
 
-function copyUrl(): void {
-  // navigator.clipboard requires a secure context (HTTPS/localhost); this app
-  // is served over plain HTTP on the LAN/Tailscale, so it's undefined there.
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(streamUrl.value).then(showCopied, () => {
-      if (legacyCopy(streamUrl.value)) showCopied();
-    });
-  } else if (legacyCopy(streamUrl.value)) {
-    showCopied();
-  }
+async function copyUrl(): Promise<void> {
+  if (await copyText(friendlyStreamUrl.value)) showCopied();
 }
 
 async function handleDelete(): Promise<void> {
@@ -1066,6 +1053,18 @@ function formatStatus(status: string): string {
     grid-column: 2;
     position: sticky;
     top: 88px;
+  }
+
+  /* The Cut console needs real room for its per-piece preview + metadata
+     forms, so it drops the two-column split and reflows to a single full-
+     width column while a cut is in progress (mark/processing/preview). */
+  .detail-grid.detail-grid--cut-open {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .detail-grid.detail-grid--cut-open .col-info {
+    grid-column: 1;
+    position: static;
   }
 }
 </style>

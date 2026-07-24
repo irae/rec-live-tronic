@@ -41,7 +41,7 @@
             :disabled="restoringIds.has(rec.id) || deletingIds.has(rec.id)"
             @click.prevent="handleRestore(rec.id)"
           >↺ {{ restoringIds.has(rec.id) ? "Restoring…" : "Restore" }}</button>
-          <a class="tbtn" :href="downloadUrl(rec.id)">⬇ Download .ts</a>
+          <a class="tbtn" :href="downloadUrl(rec.id, rec.title)">⬇ Download .ts</a>
           <button
             class="tbtn tbtn--stop"
             :disabled="restoringIds.has(rec.id) || deletingIds.has(rec.id)"
@@ -70,6 +70,7 @@ import { ref, computed, onMounted, onUnmounted } from "vue";
 import { api, type Recording } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import { useToast } from "../composables/useToast";
+import { fileUrl } from "../lib/file-url";
 
 const { toast } = useToast();
 
@@ -152,8 +153,8 @@ async function confirmDeleteForever(): Promise<void> {
   }
 }
 
-function downloadUrl(id: string): string {
-  return `${window.location.origin}/recordings/${id}/file?download=1`;
+function downloadUrl(id: string, title: string): string {
+  return fileUrl(id, title, { download: true });
 }
 
 function extractFestival(title: string): string | null {

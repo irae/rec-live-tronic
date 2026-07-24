@@ -77,9 +77,44 @@
               <span class="mini__tag">rough cut · preview</span>
               <video :ref="(el) => setPieceEl(piece.index, el as HTMLVideoElement | null)" controls class="mini-video"></video>
             </div>
+
+            <!-- mpegts.js's default lazyLoad can't reliably show/seek to the
+                 end of a large preview file, so VLC (which streams the raw
+                 file directly) is the real way to verify a cut's full
+                 length before Keep -- see CLAUDE.md's player notes. -->
+            <div class="piece-url">
+              <code>{{ pieceStreamUrl(piece) }}</code>
+              <button type="button" class="copy" @click="copyPieceUrl(piece)" :class="{ done: pieceCopyDone[piece.index] }">{{ pieceCopyDone[piece.index] ? "Copied ✓" : "Copy" }}</button>
+            </div>
+            <a v-if="isIos || isMac" class="vlc" :href="pieceVlcUrl(piece)">Open in VLC ↗</a>
+
             <label v-if="draft.pieces.length > 1" class="keepthis">
               <input type="checkbox" v-model="keepSelected" :value="piece.index" /> Keep this cut
             </label>
+
+            <div v-if="pieceForms[piece.index]" class="piece-meta">
+              <p class="piece-meta__label">Metadata for this piece</p>
+              <div class="pfield">
+                <label :for="`pf-title-${piece.index}`">Title</label>
+                <input :id="`pf-title-${piece.index}`" class="input" type="text" v-model="pieceForms[piece.index].title" />
+              </div>
+              <div class="pfield">
+                <label :for="`pf-artist-${piece.index}`">Artist</label>
+                <input :id="`pf-artist-${piece.index}`" class="input" type="text" v-model="pieceForms[piece.index].artist" placeholder="optional label" />
+              </div>
+              <div class="pfield">
+                <label :for="`pf-venue-${piece.index}`">Venue</label>
+                <input :id="`pf-venue-${piece.index}`" class="input" type="text" v-model="pieceForms[piece.index].venue" placeholder="optional label" />
+              </div>
+              <div class="pfield">
+                <label :for="`pf-event-${piece.index}`">Event</label>
+                <input :id="`pf-event-${piece.index}`" class="input" type="text" v-model="pieceForms[piece.index].event" placeholder="optional label" />
+              </div>
+              <div class="pfield">
+                <label :for="`pf-stage-${piece.index}`">Stage</label>
+                <input :id="`pf-stage-${piece.index}`" class="input" type="text" v-model="pieceForms[piece.index].stage" placeholder="optional label" />
+              </div>
+            </div>
           </div>
         </div>
 
@@ -100,11 +135,30 @@
 <script setup lang="ts">
 import { ref, watch, nextTick, onUnmounted } from "vue";
 import mpegts from "mpegts.js";
-import { api, type CutDraft, type Recording } from "../api";
+import { api, type CutDraft, type CutPiece, type Recording } from "../api";
 import { parseOffsetInput, formatOffsetSeconds } from "../lib/cut-offsets";
+import { isIosDevice, isMacDevice, vlcUrlFor } from "../lib/vlc";
+import { copyText } from "../lib/copy";
+
+interface SourceMeta {
+  title: string;
+  artist: string | null;
+  venue: string | null;
+  event: string | null;
+  stage: string | null;
+}
+
+interface PieceForm {
+  title: string;
+  artist: string;
+  venue: string;
+  event: string;
+  stage: string;
+}
 
 const props = defineProps<{
   recordingId: string;
+  recording: SourceMeta;
   getCurrentTime: () => number | null;
 }>();
 
@@ -126,6 +180,11 @@ const keeping = ref(false);
 const draftId = ref<string | null>(null);
 const draft = ref<CutDraft | null>(null);
 const keepSelected = ref<number[]>([]);
+const pieceForms = ref<Record<number, PieceForm>>({});
+const pieceCopyDone = ref<Record<number, boolean>>({});
+
+const isIos = isIosDevice();
+const isMac = isMacDevice();
 
 const useMpegts = mpegts.isSupported();
 const piecePlayers = new Map<number, ReturnType<typeof mpegts.createPlayer>>();
@@ -148,6 +207,7 @@ function closeConsole(): void {
     draft.value = null;
   }
   destroyPiecePlayers();
+  pieceForms.value = {};
   open.value = false;
   phase.value = "mark";
   markError.value = null;
@@ -230,6 +290,9 @@ async function makeCut(): Promise<void> {
     draftId.value = result.id;
     draft.value = result;
     keepSelected.value = result.pieces.map((p) => p.index);
+    pieceForms.value = Object.fromEntries(
+      result.pieces.map((p) => [p.index, defaultsForPiece(p.index, result.mode)]),
+    );
     phase.value = "preview";
     await nextTick();
     setupPiecePlayers();
@@ -247,16 +310,38 @@ function adjust(): void {
   phase.value = "mark";
 }
 
+// title default mirrors the server's own (trim keeps the source title;
+// split appends "(part N)") -- see keepCutDraft in src/api/service.ts.
+function defaultsForPiece(index: number, mode: "trim" | "split"): PieceForm {
+  const src = props.recording;
+  return {
+    title: mode === "trim" ? src.title : `${src.title} (part ${index + 1})`,
+    artist: src.artist ?? "",
+    venue: src.venue ?? "",
+    event: src.event ?? "",
+    stage: src.stage ?? "",
+  };
+}
+
 async function keep(): Promise<void> {
   if (!draftId.value || !draft.value) return;
   keepError.value = null;
   keeping.value = true;
   try {
-    const body = draft.value.pieces.length > 1 ? { keep: keepSelected.value } : {};
+    const overrides: Record<string, PieceForm> = {};
+    for (const piece of draft.value.pieces) {
+      const form = pieceForms.value[piece.index];
+      if (form) overrides[String(piece.index)] = form;
+    }
+    const body = {
+      ...(draft.value.pieces.length > 1 ? { keep: keepSelected.value } : {}),
+      overrides,
+    };
     const recordings = await api.keepCutDraft(props.recordingId, draftId.value, body);
     destroyPiecePlayers();
     draftId.value = null;
     draft.value = null;
+    pieceForms.value = {};
     open.value = false;
     phase.value = "mark";
     emit("kept", recordings);
@@ -266,6 +351,22 @@ async function keep(): Promise<void> {
   } finally {
     keeping.value = false;
   }
+}
+
+function pieceStreamUrl(piece: CutPiece): string {
+  return `${window.location.origin}${piece.file_url}`;
+}
+
+function pieceVlcUrl(piece: CutPiece): string {
+  return vlcUrlFor(pieceStreamUrl(piece));
+}
+
+async function copyPieceUrl(piece: CutPiece): Promise<void> {
+  if (!(await copyText(pieceStreamUrl(piece)))) return;
+  pieceCopyDone.value[piece.index] = true;
+  setTimeout(() => {
+    pieceCopyDone.value[piece.index] = false;
+  }, 1600);
 }
 
 function setPieceEl(index: number, el: HTMLVideoElement | null): void {
@@ -421,7 +522,10 @@ onUnmounted(() => {
 .room-note { font-family: var(--mono); font-size: 10.5px; letter-spacing: .03em; color: var(--ink-soft); margin: 0 14px 14px; }
 
 .cuts { display: grid; gap: 16px; padding: 0 14px 14px; }
-@media (min-width: 640px) { .cuts--split { grid-template-columns: 1fr 1fr; } }
+/* Split pieces only go two-up once there's genuinely enough room for a
+   5-field metadata form per card -- the full-width desktop layout (item 6
+   above) is what makes this breakpoint viable at all. */
+@media (min-width: 1080px) { .cuts--split { grid-template-columns: 1fr 1fr; } }
 
 .cutcard {
   border: 2.5px dashed var(--fluoro);
@@ -445,6 +549,47 @@ onUnmounted(() => {
   letter-spacing: .1em; text-transform: uppercase; color: var(--ink-soft); cursor: pointer; user-select: none;
 }
 .keepthis input { accent-color: var(--violet); width: 15px; height: 15px; }
+
+.piece-url {
+  display: flex; border: 2px solid var(--line); background: var(--paper-2); align-items: stretch;
+}
+.piece-url code {
+  flex: 1; min-width: 0; font-family: var(--mono); font-size: 10.5px; padding: 8px 10px; color: var(--ink);
+  white-space: nowrap; overflow-x: auto; display: flex; align-items: center;
+}
+.piece-url .copy {
+  border: none; border-left: 2px solid var(--line); background: var(--violet); color: #fff; cursor: pointer;
+  font-family: var(--ui); font-weight: 700; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  padding: 0 12px; white-space: nowrap; transition: background .12s;
+}
+.piece-url .copy:hover { background: var(--violet-d); }
+.piece-url .copy.done { background: var(--fluoro); }
+
+.vlc {
+  align-self: flex-start; font-family: var(--mono); font-size: 10.5px; letter-spacing: .04em; color: var(--ink-soft);
+  text-decoration: underline; text-underline-offset: 3px; text-decoration-style: dotted; cursor: pointer;
+}
+.vlc:hover { color: var(--violet); }
+
+.piece-meta { border-top: 2px dashed var(--ink-soft); padding-top: 11px; display: grid; gap: 10px; }
+.piece-meta__label {
+  margin: 0; font-family: var(--mono); font-weight: 700; font-size: 10px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-soft);
+}
+.pfield label {
+  display: block; font-family: var(--mono); font-weight: 700; font-size: 10px; letter-spacing: .08em;
+  text-transform: uppercase; color: var(--ink-soft); margin-bottom: 5px;
+}
+.pfield .input {
+  width: 100%; font-family: var(--ui); font-size: 13px; padding: 8px 10px; border: 2px solid var(--line);
+  background: var(--paper); color: var(--ink);
+}
+.pfield .input:focus { outline: none; border-color: var(--violet); }
+
+@media (min-width: 520px) {
+  .piece-meta { grid-template-columns: 1fr 1fr; }
+  .piece-meta__label { grid-column: 1 / -1; }
+}
 
 .review {
   margin: 6px 14px 14px; border-top: 2.5px dashed var(--fluoro); padding-top: 16px;
