@@ -120,6 +120,15 @@ class ApiClient {
     return data.recording;
   }
 
+  async lookupOembed(url: string): Promise<{ authorName: string | null; title: string | null }> {
+    const response = await fetch(`/recordings/oembed?url=${encodeURIComponent(url)}`);
+    if (!response.ok) {
+      throw new Error("Failed to look up stream info");
+    }
+    const data = (await response.json()) as { author_name: string | null; title: string | null };
+    return { authorName: data.author_name, title: data.title };
+  }
+
   async permanentlyDeleteRecording(id: string): Promise<void> {
     const response = await fetch(`/recordings/${id}/trash`, { method: "DELETE" });
     if (!response.ok) {

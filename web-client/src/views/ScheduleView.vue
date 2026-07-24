@@ -12,6 +12,22 @@
           <div class="card__head">New Recording <small>rec.new</small></div>
           <div class="card__body">
             <div v-if="error" class="error-message">{{ error }}</div>
+
+            <div class="field">
+              <div class="entry-toggle">
+                <button
+                  type="button"
+                  :class="['etbtn', { 'etbtn--active': entryMode === 'scheduled' }]"
+                  @click="entryMode = 'scheduled'"
+                >Scheduled</button>
+                <button
+                  type="button"
+                  :class="['etbtn', { 'etbtn--active': entryMode === 'now' }]"
+                  @click="entryMode = 'now'"
+                >Now</button>
+              </div>
+            </div>
+
             <div class="field">
               <label for="url"><span class="num">01</span> · Stream URL</label>
               <input
@@ -20,6 +36,7 @@
                 type="url"
                 v-model="form.url"
                 placeholder="https://youtube.com/watch?v=…"
+                @blur="handleUrlBlur"
               />
             </div>
 
@@ -48,7 +65,7 @@
               </div>
             </div>
 
-            <div class="field">
+            <div class="field" v-if="entryMode === 'scheduled'">
               <label for="start"><span class="num">04</span> · Start</label>
               <input
                 class="input"
@@ -71,7 +88,7 @@
               />
             </div>
 
-            <div class="field">
+            <div class="field" v-if="entryMode === 'scheduled'">
               <label for="stop"><span class="num">06</span> · Stop</label>
               <input
                 class="input"
@@ -201,12 +218,14 @@ const extendForm = reactive({
   stop: "",
 });
 
+const entryMode = ref<"scheduled" | "now">("scheduled");
+
 const form = reactive({
   url: "",
   title: "",
   quality: "best",
   start: "",
-  duration: "",
+  duration: "1:10",
   stop: "",
 });
 
@@ -309,6 +328,10 @@ onUnmounted(() => {
 });
 
 async function handleAddRecording(): Promise<void> {
+  if (entryMode.value === "now") {
+    await handleAddRecordingNow();
+    return;
+  }
   try {
     error.value = null;
     if (!form.url || !form.title) {
@@ -332,16 +355,65 @@ async function handleAddRecording(): Promise<void> {
     });
 
     recordings.value.unshift(newRecording as unknown as Recording);
-    form.url = "";
-    form.title = "";
-    form.quality = "best";
-    form.start = "";
-    form.duration = "";
-    form.stop = "";
+    resetForm();
   } catch (err) {
     console.error("Failed to create recording:", err);
     error.value =
       err instanceof Error ? err.message : "Failed to create recording";
+  }
+}
+
+// Now mode creates (not PATCHes) a row with a client-computed start_at of
+// "right now" -- distinct from handleStartNow, which PATCHes an existing
+// scheduled row's start_at instead. See plan.md Phase 4.
+async function handleAddRecordingNow(): Promise<void> {
+  try {
+    error.value = null;
+    if (!form.url) {
+      error.value = "Stream URL is required";
+      return;
+    }
+
+    const startDate = new Date();
+    const stopDate = new Date(startDate.getTime() + (parseDurationMinutes(form.duration) ?? 70) * 60_000);
+    const title = form.title.trim() || form.url.trim();
+
+    const newRecording = await api.createRecording({
+      url: form.url,
+      title,
+      quality: form.quality,
+      start_at: startDate.toISOString(),
+      stop_at: stopDate.toISOString(),
+    });
+
+    recordings.value.unshift(newRecording as unknown as Recording);
+    resetForm();
+  } catch (err) {
+    console.error("Failed to create recording:", err);
+    error.value =
+      err instanceof Error ? err.message : "Failed to create recording";
+  }
+}
+
+function resetForm(): void {
+  form.url = "";
+  form.title = "";
+  form.quality = "best";
+  form.start = "";
+  form.duration = "1:10";
+  form.stop = "";
+}
+
+// Best-effort title prefill: never blocks or errors the form on a slow/failed
+// oEmbed lookup, and never overwrites a title the user already typed.
+async function handleUrlBlur(): Promise<void> {
+  if (!form.url || form.title) return;
+  try {
+    const { authorName, title } = await api.lookupOembed(form.url);
+    if (form.title) return;
+    form.title = title || authorName || (entryMode.value === "now" ? form.url.trim() : "");
+  } catch (err) {
+    console.error("Failed to look up stream info for title prefill:", err);
   }
 }
 
@@ -657,6 +729,35 @@ function formatTimeInfo(rec: Recording): string {
   color: var(--ink-soft);
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+.entry-toggle {
+  display: flex;
+  border: 2px solid var(--line);
+}
+
+.etbtn {
+  flex: 1;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 11px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: 10px 12px;
+  border: none;
+  background: var(--paper);
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: all .12s;
+}
+
+.etbtn + .etbtn {
+  border-left: 2px solid var(--line);
+}
+
+.etbtn--active {
+  background: var(--violet);
+  color: #fff;
 }
 
 .quality {

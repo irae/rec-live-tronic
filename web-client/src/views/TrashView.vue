@@ -41,6 +41,7 @@
             :disabled="restoringIds.has(rec.id) || deletingIds.has(rec.id)"
             @click.prevent="handleRestore(rec.id)"
           >↺ {{ restoringIds.has(rec.id) ? "Restoring…" : "Restore" }}</button>
+          <a class="tbtn" :href="downloadUrl(rec.id)">⬇ Download .ts</a>
           <button
             class="tbtn tbtn--stop"
             :disabled="restoringIds.has(rec.id) || deletingIds.has(rec.id)"
@@ -144,6 +145,10 @@ async function confirmDeleteForever(): Promise<void> {
   } finally {
     deletingIds.value.delete(id);
   }
+}
+
+function downloadUrl(id: string): string {
+  return `${window.location.origin}/recordings/${id}/file?download=1`;
 }
 
 function extractFestival(title: string): string | null {

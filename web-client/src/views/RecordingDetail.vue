@@ -50,6 +50,8 @@
           <span v-if="isIos || isMac" class="vlc-note"> — optional, best-effort, may not always work without VLC's URL handler registered</span>
         </div>
 
+        <a v-if="recording.status === 'recorded'" class="btn btn--download" :href="downloadUrl">⬇ Download .ts</a>
+
         <div class="danger">
           <h3>◆ Remove recording</h3>
           <p>Moves this recording to Trash. It stays there for 30 days — restore it any time, or purge it for good from the Trash view.</p>
@@ -110,6 +112,11 @@ const deleteError = ref<string | null>(null);
 const streamUrl = computed(() => {
   if (!recordingId.value) return "";
   return `${window.location.origin}/recordings/${recordingId.value}/file`;
+});
+
+const downloadUrl = computed(() => {
+  if (!recordingId.value) return "";
+  return `${window.location.origin}/recordings/${recordingId.value}/file?download=1`;
 });
 
 // mpegts.js's own supportability check (MSE availability etc). Falls back to
@@ -657,6 +664,19 @@ function formatStatus(status: string): string {
 
 .btn--danger:hover {
   background: var(--fluoro);
+  color: #fff;
+  box-shadow: 4px 4px 0 var(--ink);
+}
+
+.btn--download {
+  margin-top: 20px;
+  background: var(--paper);
+  color: var(--violet);
+  border-color: var(--violet);
+}
+
+.btn--download:hover {
+  background: var(--violet);
   color: #fff;
   box-shadow: 4px 4px 0 var(--ink);
 }

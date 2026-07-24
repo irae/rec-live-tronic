@@ -849,3 +849,40 @@ t.test("serves a trashed recording's file for download", async (t) => {
   const body = await fileResponse.text();
   t.equal(body, testContent);
 });
+
+t.test("creates a now-mode recording that starts at the current time", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+
+  const beforeMs = Date.now();
+  const startAt = new Date().toISOString();
+  const stopAt = new Date(Date.now() + 70 * 60_000).toISOString();
+
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=now-mode-test",
+      title: "Now mode test",
+      start_at: startAt,
+      stop_at: stopAt,
+    }),
+  });
+  const afterMs = Date.now();
+  t.equal(created.status, 201);
+  const createdBody = await created.json() as {
+    recording: { id: string; status: string; startAt: string; stopAt: string };
+  };
+  t.equal(createdBody.recording.status, "scheduled");
+  const createdStartMs = new Date(createdBody.recording.startAt).getTime();
+  t.ok(
+    createdStartMs >= beforeMs - 1000 && createdStartMs <= afterMs + 1000,
+    "start_at should be close to the moment of submission"
+  );
+
+  const fetched = await fetch(`${base}/recordings/${createdBody.recording.id}`);
+  const fetchedBody = await fetched.json() as { recording: { status: string } };
+  t.equal(fetchedBody.recording.status, "scheduled");
+});
