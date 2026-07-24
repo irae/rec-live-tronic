@@ -21,6 +21,7 @@
           <div class="stub-foot">
             <span class="dur">{{ computeDuration(recording.startAt, recording.stopAt) }}</span>
             <span class="chip" :class="{ 'chip--hd': isHd(recording.quality) }">{{ recording.quality || "n/a" }}</span>
+            <span v-if="recording.cutFromId" class="chip chip--cut">✂ Cut</span>
             <button
               v-if="deleteMode"
               type="button"
@@ -52,6 +53,7 @@ interface Recording {
   status: string;
   url: string;
   cookieId: string | null;
+  cutFromId?: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -176,6 +178,7 @@ function isHd(quality: string): boolean {
 }
 
 .chip--hd { color: var(--violet); border-color: var(--violet); }
+.chip--cut { color: var(--violet); border-color: var(--violet); border-style: dashed; }
 
 .arrow { font-family: var(--disp); font-size: 22px; color: var(--fluoro); line-height:1; }
 

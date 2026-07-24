@@ -45,6 +45,7 @@ interface Recording {
   status: string;
   url: string;
   cookieId: string | null;
+  cutFromId: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;

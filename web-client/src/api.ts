@@ -14,9 +14,25 @@ export interface Recording {
   stopAt: string;
   status: string;
   trashedAt: string | null;
+  cutFromId: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CutPiece {
+  index: number;
+  start: string;
+  end: string;
+  duration: string;
+  file_url: string;
+}
+
+export interface CutDraft {
+  id: string;
+  mode: "trim" | "split";
+  status: "previewing" | "promoted" | "failed";
+  pieces: CutPiece[];
 }
 
 export interface DiskSpace {
@@ -161,6 +177,46 @@ class ApiClient {
       const data = (await response.json()) as { error?: ApiError };
       throw new Error(data.error?.message ?? "Failed to permanently delete recording");
     }
+  }
+
+  async createCutDraft(sourceId: string, payload: unknown): Promise<CutDraft> {
+    const response = await fetch(`/recordings/${sourceId}/cut`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const data = (await response.json()) as { error?: ApiError };
+      throw new Error(data.error?.message ?? "Failed to make the cut");
+    }
+    const data = (await response.json()) as { draft: CutDraft };
+    return data.draft;
+  }
+
+  async keepCutDraft(sourceId: string, draftId: string, payload: unknown): Promise<Recording[]> {
+    const response = await fetch(`/recordings/${sourceId}/cut/${draftId}/keep`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      const data = (await response.json()) as { error?: ApiError };
+      throw new Error(data.error?.message ?? "Failed to keep the cut");
+    }
+    const data = (await response.json()) as { recordings: Recording[] };
+    return data.recordings;
+  }
+
+  async abandonCutDraft(sourceId: string, draftId: string): Promise<void> {
+    const response = await fetch(`/recordings/${sourceId}/cut/${draftId}`, { method: "DELETE" });
+    if (!response.ok && response.status !== 404) {
+      const data = (await response.json()) as { error?: ApiError };
+      throw new Error(data.error?.message ?? "Failed to abandon the cut draft");
+    }
+  }
+
+  async listCutFrom(sourceId: string): Promise<Recording[]> {
+    return this.fetchList(`/recordings?cut_from=${encodeURIComponent(sourceId)}`, "Failed to list cuts");
   }
 }
 

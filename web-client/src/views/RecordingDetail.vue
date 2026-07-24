@@ -5,18 +5,26 @@
     <div v-if="recording" class="detail-grid">
       <!-- MEDIA -->
       <div class="col-media">
-        <div v-if="recording.status === 'recorded'" class="player">
-          <div class="frame">
-            <span>{{ extractFestival(recording.title) ? extractFestival(recording.title) : recording.stage || "Stage" }}</span>
-            <span class="rec"><span class="blip"></span>archived</span>
+        <div v-if="recording.status === 'recorded'" class="orig" :class="{ 'orig--collapsed': playerCollapsed }">
+          <div v-if="playerCollapsed" class="orig__bar" @click="playerCollapsed = false">
+            <span class="l"><span class="caret">▸</span> Original · {{ recording.title }} <b>— still open, paused</b></span>
+            <span class="toggle">Show</span>
           </div>
-          <video
-            v-if="useMpegts"
-            ref="videoEl"
-            controls
-            class="video-player"
-          ></video>
-          <video v-else :src="streamUrl" controls class="video-player"></video>
+          <div class="orig__body">
+            <div class="player">
+              <div class="frame">
+                <span>{{ extractFestival(recording.title) ? extractFestival(recording.title) : recording.stage || "Stage" }}</span>
+                <span class="rec"><span class="blip"></span>archived</span>
+              </div>
+              <video
+                v-if="useMpegts"
+                ref="videoEl"
+                controls
+                class="video-player"
+              ></video>
+              <video v-else :src="streamUrl" controls class="video-player"></video>
+            </div>
+          </div>
         </div>
         <div v-else class="player player--placeholder">
           <div class="frame">
@@ -29,12 +37,37 @@
           </div>
         </div>
 
+        <CutConsole
+          v-if="recording.status === 'recorded' && recordingId"
+          :recording-id="recordingId"
+          :get-current-time="getCurrentTime"
+          @phase-change="onCutPhaseChange"
+          @kept="onCutKept"
+        />
+
         <h1 class="detail-title">{{ recording.title }}<br></h1>
 
         <div class="detail-sub">
           <span class="m">Duration <b>{{ computeDuration(recording.startAt, recording.stopAt) }}</b></span>
           <span class="m">Quality <b>{{ recording.quality || "n/a" }}</b></span>
           <span class="m">Recorded <b>{{ formatDate(recording.startAt) }}</b></span>
+        </div>
+
+        <div v-if="recording.cutFromId && sourceRecording" class="lineage">
+          <span class="ic">✂</span>
+          <span class="txt">Cut from <b>{{ sourceRecording.title }}</b>
+            <template v-if="lineageOffsets"> · {{ lineageOffsets }}</template>
+            &nbsp;
+            <router-link :to="{ name: 'detail', params: { id: recording.cutFromId } }">See original ↗</router-link>
+          </span>
+        </div>
+
+        <div v-else-if="derivedRecordings.length > 0" class="recut">
+          ↻ <b>Re-cut into {{ derivedRecordings.length }} recording{{ derivedRecordings.length === 1 ? "" : "s" }}</b>
+          —
+          <template v-for="(cut, idx) in derivedRecordings" :key="cut.id">
+            <router-link :to="{ name: 'detail', params: { id: cut.id } }">{{ cut.title }} ↗</router-link><span v-if="idx < derivedRecordings.length - 1">, </span>
+          </template>
         </div>
       </div>
 
@@ -100,8 +133,10 @@
 import { ref, watch, computed, onUnmounted, nextTick } from "vue";
 import { useRoute, useRouter } from "vue-router";
 import mpegts from "mpegts.js";
-import { api } from "../api";
+import { api, type Recording as ApiRecording } from "../api";
 import { useToast } from "../composables/useToast";
+import CutConsole from "../components/CutConsole.vue";
+import { formatOffsetSeconds } from "../lib/cut-offsets";
 
 const { toast } = useToast();
 
@@ -115,6 +150,7 @@ interface Recording {
   startAt: string;
   stopAt: string;
   cookieId: string | null;
+  cutFromId: string | null;
   version: number;
   createdAt: string;
   updatedAt: string;
@@ -135,6 +171,37 @@ const editing = ref(false);
 const editSaving = ref(false);
 const editError = ref<string | null>(null);
 const editForm = ref({ title: "", stage: "", artist: "", venue: "", event: "" });
+const playerCollapsed = ref(false);
+const sourceRecording = ref<ApiRecording | null>(null);
+const derivedRecordings = ref<ApiRecording[]>([]);
+
+const lineageOffsets = computed(() => {
+  if (!recording.value || !sourceRecording.value) return null;
+  const sourceStart = new Date(sourceRecording.value.startAt).getTime();
+  const startOffset = (new Date(recording.value.startAt).getTime() - sourceStart) / 1000;
+  const endOffset = (new Date(recording.value.stopAt).getTime() - sourceStart) / 1000;
+  if (!Number.isFinite(startOffset) || !Number.isFinite(endOffset)) return null;
+  return `${formatOffsetSeconds(startOffset)} → ${formatOffsetSeconds(endOffset)}`;
+});
+
+function getCurrentTime(): number | null {
+  return videoEl.value ? videoEl.value.currentTime : null;
+}
+
+function onCutPhaseChange(phase: "mark" | "processing" | "preview" | "closed"): void {
+  playerCollapsed.value = phase === "preview";
+}
+
+async function onCutKept(kept: ApiRecording[]): Promise<void> {
+  toast(kept.length === 1 ? "Kept 1 cut" : `Kept ${kept.length} cuts`);
+  if (recordingId.value) {
+    try {
+      derivedRecordings.value = await api.listCutFrom(recordingId.value);
+    } catch (error) {
+      console.error("Failed to refresh derived recordings:", error);
+    }
+  }
+}
 
 const streamUrl = computed(() => {
   if (!recordingId.value) return "";
@@ -207,6 +274,9 @@ watch(
     recording.value = null;
     editing.value = false;
     editError.value = null;
+    playerCollapsed.value = false;
+    sourceRecording.value = null;
+    derivedRecordings.value = [];
     if (typeof id !== "string") return;
     try {
       recording.value = await api.getRecording(id);
@@ -214,6 +284,15 @@ watch(
       if (recording.value.status === "recorded") {
         await nextTick();
         setupPlayer();
+      }
+      if (recording.value.cutFromId) {
+        api.getRecording(recording.value.cutFromId)
+          .then((source) => { sourceRecording.value = source; })
+          .catch((error) => console.error("Failed to load source recording:", error));
+      } else {
+        api.listCutFrom(id)
+          .then((cuts) => { derivedRecordings.value = cuts; })
+          .catch((error) => console.error("Failed to load derived recordings:", error));
       }
     } catch (error) {
       console.error("Failed to load recording:", error);
@@ -850,6 +929,114 @@ function formatStatus(status: string): string {
   text-align: center;
   color: var(--ink-soft);
   padding: 2rem;
+}
+
+.orig__body {
+  height: auto;
+  overflow: visible;
+}
+
+.orig--collapsed {
+  border: 2px solid var(--ink-soft);
+  background: var(--paper);
+  margin-bottom: 4px;
+}
+
+.orig--collapsed .orig__body {
+  height: 0;
+  overflow: hidden;
+}
+
+.orig__bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 9px 13px;
+  cursor: pointer;
+}
+
+.orig__bar .l {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 10.5px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.orig__bar .toggle {
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 10px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--violet);
+}
+
+.lineage {
+  margin-top: 18px;
+  border: 2px solid var(--violet);
+  background: var(--paper);
+  padding: 12px 14px;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.lineage .ic {
+  font-size: 15px;
+  color: var(--violet);
+  line-height: 1.2;
+}
+
+.lineage .txt {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  letter-spacing: .02em;
+  color: var(--ink-soft);
+  min-width: 0;
+}
+
+.lineage .txt b {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.lineage a {
+  color: var(--violet);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-style: dotted;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.recut {
+  margin-top: 14px;
+  border: 2px dashed var(--ink-soft);
+  background: var(--paper);
+  padding: 11px 14px;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: .02em;
+  color: var(--ink-soft);
+}
+
+.recut b {
+  color: var(--ink);
+}
+
+.recut a {
+  color: var(--violet);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  text-decoration-style: dotted;
+  font-weight: 700;
 }
 
 @media (min-width: 768px) {
