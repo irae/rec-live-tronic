@@ -1,13 +1,13 @@
 FROM node:24-trixie@sha256:eb2c73a27cf714b4b6b030f88ab72e62192c38b7d313ea3456695b8ae03c5f3c AS build
 
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 ca-certificates ffmpeg \
+RUN apt-get update && apt-get install -y --no-install-recommends build-essential python3 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . ./
 RUN npm test
-RUN npm ci --omit=dev && node -e "const Database = require('better-sqlite3'); const db = new Database(':memory:'); db.prepare('SELECT 1').get(); db.close();"
+RUN npm prune --omit=dev && node -e "const Database = require('better-sqlite3'); const db = new Database(':memory:'); db.prepare('SELECT 1').get(); db.close();"
 
 FROM node:24-trixie@sha256:eb2c73a27cf714b4b6b030f88ab72e62192c38b7d313ea3456695b8ae03c5f3c AS release
 
