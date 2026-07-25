@@ -197,6 +197,9 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
   app.delete("/recordings/:id/cut/:draftId", async (request, response, next) => {
     try { await recorder.abandonCutDraft(request.params.id, request.params.draftId); response.status(204).end(); } catch (error) { next(error); }
   });
+  app.post("/recordings/backfill-mp4", async (request, response, next) => {
+    try { response.json(await recorder.backfillMp4()); } catch (error) { next(error); }
+  });
   app.delete("/recordings/:id/file", async (request, response, next) => {
     try { await recorder.trashRecording(request.params.id); response.status(204).end(); } catch (error) { next(error); }
   });

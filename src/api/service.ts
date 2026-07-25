@@ -645,6 +645,29 @@ export class RecorderService {
     }
   }
 
+  async backfillMp4(): Promise<{ remuxed: number; skipped: number; failed: string[] }> {
+    // Fetch both trashed and non-trashed recorded rows, as trash still serves downloads/players
+    const nonTrashedRecordings = this.recordings.list({ status: "recorded", trashed: false });
+    const trashedRecordings = this.recordings.list({ status: "recorded", trashed: true });
+    const recordings = [...nonTrashedRecordings, ...trashedRecordings];
+    let remuxed = 0;
+    let skipped = 0;
+    const failed: string[] = [];
+
+    for (const recording of recordings) {
+      const result = await this.remuxRecording(recording.id);
+      if (result === "remuxed") {
+        remuxed += 1;
+      } else if (result === "skipped") {
+        skipped += 1;
+      } else if (result === "failed") {
+        failed.push(recording.id);
+      }
+    }
+
+    return { remuxed, skipped, failed };
+  }
+
   transition(input: { id: string; expected_status: unknown; expected_version: unknown; status: unknown; last_started_boot_id?: unknown; last_started_stop_at?: unknown }): ReturnType<typeof mapRecording> {
     if (!Number.isSafeInteger(input.expected_version) || (input.expected_version as number) < 0) throw new AppError("VALIDATION_ERROR", 400, "expected_version is invalid");
     const lastStartedBootId = input.last_started_boot_id === undefined ? undefined : text(input.last_started_boot_id, "last_started_boot_id", 200);

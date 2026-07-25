@@ -2019,3 +2019,65 @@ t.test("sweepStaleCutDrafts removes previewing drafts (and folders) older than t
     await rm(sweepRoot, { recursive: true, force: true });
   }
 });
+
+t.test("backfill-mp4 remuxes every remaining .ts row and re-runs clean", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+
+  // Create and finalize a recorded row with .ts tsPath
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=backfill-test-1",
+      title: "backfill test 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+
+  // Transition to recording
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+
+  // Write test content and finalize
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+  const filePath = join(root, "recordings", `${id}.ts`);
+  await writeFile(filePath, "test video content");
+  const transitionResponse = await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+  t.equal(transitionResponse.status, 200);
+
+  // Give the fire-and-forget remux from transition time to complete if it was scheduled
+  await new Promise(resolve => setTimeout(resolve, 100));
+
+  // Call backfill-mp4
+  const backfillResponse = await fetch(`${base}/recordings/backfill-mp4`, { method: "POST" });
+  t.equal(backfillResponse.status, 200);
+  const backfillBody = await backfillResponse.json() as { remuxed: number; skipped: number; failed: string[] };
+  t.equal(typeof backfillBody.remuxed, "number");
+  t.equal(typeof backfillBody.skipped, "number");
+  t.ok(Array.isArray(backfillBody.failed));
+  t.ok(backfillBody.remuxed >= 1);
+  t.ok(!backfillBody.failed.includes(id));
+
+  // Re-run should have only skipped rows (already remuxed to .mp4)
+  const secondBackfillResponse = await fetch(`${base}/recordings/backfill-mp4`, { method: "POST" });
+  t.equal(secondBackfillResponse.status, 200);
+  const secondBackfillBody = await secondBackfillResponse.json() as { remuxed: number; skipped: number; failed: string[] };
+  t.equal(secondBackfillBody.remuxed, 0);
+  t.ok(secondBackfillBody.skipped >= 1);
+  t.equal(secondBackfillBody.failed.length, 0);
+});
