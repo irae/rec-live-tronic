@@ -44,7 +44,6 @@ const deleteMode = ref(false);
 const deletingIds = ref<Set<string>>(new Set());
 
 onMounted(async () => {
-  if (sharedRecordings.value.length > 0) return;
   try {
     await api.listRecordings();
   } catch (error) {
@@ -61,7 +60,6 @@ async function handleDelete(id: string): Promise<void> {
   deletingIds.value.add(id);
   try {
     await api.deleteRecordingFile(id);
-    sharedRecordings.value = sharedRecordings.value.filter((rec) => rec.id !== id);
     toast("Moved to Trash");
   } catch (error) {
     console.error("Failed to delete recording:", error);

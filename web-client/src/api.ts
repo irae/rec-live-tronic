@@ -56,9 +56,23 @@ export const isRecording = ref(false);
 
 // Shared full (unfiltered, non-trashed) recordings list, kept current by
 // App.vue's single global poll. Views that need "everything except trash"
-// (Schedule, Archive) read/filter/mutate this instead of running their own
+// (Schedule, Archive) read and filter this instead of running their own
 // poll, so they never drift out of phase with the header or each other.
+// Every mutating ApiClient method below patches this ref (and
+// trashedRecordings) as part of succeeding, so views never have to.
 export const recordings = ref<Recording[]>([]);
+
+// Shared trashed-recordings list, the trash-side counterpart of `recordings`.
+// TrashView runs its own poll for it (the trashed set is structurally
+// disjoint from the main list), but cross-list moves (delete, restore,
+// permanent delete, cut Keep) update both refs immediately here.
+export const trashedRecordings = ref<Recording[]>([]);
+
+function removeFrom(list: { value: Recording[] }, id: string): Recording | undefined {
+  const found = list.value.find((rec) => rec.id === id);
+  if (found) list.value = list.value.filter((rec) => rec.id !== id);
+  return found;
+}
 
 class ApiClient {
   private async fetchList(url: string, errorMessage: string): Promise<Recording[]> {
@@ -91,7 +105,9 @@ class ApiClient {
   }
 
   async listTrashedRecordings(): Promise<Recording[]> {
-    return this.fetchList("/recordings?trashed=true", "Failed to list trash");
+    const result = await this.fetchList("/recordings?trashed=true", "Failed to list trash");
+    trashedRecordings.value = result;
+    return result;
   }
 
   async getRecording(id: string): Promise<Recording> {
@@ -115,6 +131,7 @@ class ApiClient {
       throw new Error(data.error?.message ?? "Failed to create recording");
     }
     const data = (await response.json()) as { recording: Recording };
+    recordings.value = [data.recording, ...recordings.value];
     return data.recording;
   }
 
@@ -128,7 +145,10 @@ class ApiClient {
       const data = (await response.json()) as { error?: ApiError };
       throw new Error(data.error?.message ?? "Failed to patch recording");
     }
-    return (await response.json()) as { recording: Recording };
+    const data = (await response.json()) as { recording: Recording };
+    const idx = recordings.value.findIndex((rec) => rec.id === id);
+    if (idx >= 0) recordings.value[idx] = data.recording;
+    return data;
   }
 
   async cancelRecording(id: string): Promise<void> {
@@ -137,6 +157,8 @@ class ApiClient {
       const data = (await response.json()) as { error?: ApiError };
       throw new Error(data.error?.message ?? "Failed to cancel recording");
     }
+    const cancelled = recordings.value.find((rec) => rec.id === id);
+    if (cancelled) cancelled.status = "cancelled";
   }
 
   async deleteRecordingFile(id: string): Promise<void> {
@@ -144,6 +166,12 @@ class ApiClient {
     if (!response.ok) {
       const data = (await response.json()) as { error?: ApiError };
       throw new Error(data.error?.message ?? "Failed to delete recording file");
+    }
+    const trashed = removeFrom(recordings, id);
+    if (trashed) {
+      // The DELETE response carries no body; approximate trashedAt locally so
+      // the row shows up in Trash immediately. The next trash poll corrects it.
+      trashedRecordings.value = [{ ...trashed, trashedAt: new Date().toISOString() }, ...trashedRecordings.value];
     }
   }
 
@@ -154,6 +182,8 @@ class ApiClient {
       throw new Error(data.error?.message ?? "Failed to restore recording");
     }
     const data = (await response.json()) as { recording: Recording };
+    removeFrom(trashedRecordings, id);
+    recordings.value = [data.recording, ...recordings.value];
     return data.recording;
   }
 
@@ -187,6 +217,12 @@ class ApiClient {
       const data = (await response.json()) as { error?: ApiError };
       throw new Error(data.error?.message ?? "Failed to permanently delete recording");
     }
+    removeFrom(trashedRecordings, id);
+    // Refetch so the header's disk-space figures (a side effect of any list
+    // call) reflect the freed bytes right away, not on the next poll tick.
+    this.listTrashedRecordings().catch((error) => {
+      console.error("Failed to refresh trash after permanent delete:", error);
+    });
   }
 
   async createCutDraft(sourceId: string, payload: unknown): Promise<CutDraft> {
@@ -214,6 +250,13 @@ class ApiClient {
       throw new Error(data.error?.message ?? "Failed to keep the cut");
     }
     const data = (await response.json()) as { recordings: Recording[] };
+    // A successful Keep renames-and-trashes the source recording server-side:
+    // the kept pieces join the main list and the source moves to trash.
+    removeFrom(recordings, sourceId);
+    recordings.value = [...data.recordings, ...recordings.value];
+    this.listTrashedRecordings().catch((error) => {
+      console.error("Failed to refresh trash after cut keep:", error);
+    });
     return data.recordings;
   }
 

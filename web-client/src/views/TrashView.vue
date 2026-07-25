@@ -67,7 +67,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted } from "vue";
-import { api, type Recording } from "../api";
+import { api, trashedRecordings as sharedTrashed, type Recording } from "../api";
 import ConfirmDialog from "../components/ConfirmDialog.vue";
 import { useToast } from "../composables/useToast";
 import { fileUrl } from "../lib/file-url";
@@ -78,7 +78,11 @@ interface TrashedRecording extends Recording {
   trashedAt: string;
 }
 
-const trashedRecordings = ref<TrashedRecording[]>([]);
+// Derived from the shared trash list in api.ts, which every trash-moving
+// action (delete, restore, permanent delete, cut Keep) patches immediately.
+const trashedRecordings = computed(() =>
+  sharedTrashed.value.filter((rec): rec is TrashedRecording => rec.trashedAt !== null),
+);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const restoringIds = ref<Set<string>>(new Set());
@@ -92,10 +96,7 @@ const confirmDeleteTitle = computed(() => {
 async function fetchTrashed(): Promise<void> {
   try {
     error.value = null;
-    const all = await api.listTrashedRecordings();
-    trashedRecordings.value = all.filter(
-      (rec): rec is TrashedRecording => rec.trashedAt !== null,
-    );
+    await api.listTrashedRecordings();
   } catch (err) {
     console.error("Failed to load trash:", err);
     error.value = err instanceof Error ? err.message : "Failed to load trash";
@@ -120,7 +121,6 @@ async function handleRestore(id: string): Promise<void> {
   try {
     error.value = null;
     await api.restoreRecording(id);
-    trashedRecordings.value = trashedRecordings.value.filter((rec) => rec.id !== id);
     toast("Recording restored");
   } catch (err) {
     console.error("Failed to restore recording:", err);
@@ -143,12 +143,6 @@ async function confirmDeleteForever(): Promise<void> {
   try {
     error.value = null;
     await api.permanentlyDeleteRecording(id);
-    // Re-fetch immediately rather than just filtering the row out locally --
-    // the list response also carries the disk-space figures (diskSpace is a
-    // shared ref populated as a side effect of any list call), so this
-    // updates the header's free-space reading right away instead of waiting
-    // for the next 60s poll tick.
-    trashedRecordings.value = await api.listTrashedRecordings();
     toast("Deleted permanently");
   } catch (err) {
     console.error("Failed to permanently delete recording:", err);

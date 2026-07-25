@@ -446,7 +446,7 @@ async function handleAddRecording(): Promise<void> {
       ? new Date(form.stop)
       : new Date(startDate.getTime() + (parseDurationMinutes(form.duration) ?? 70) * 60_000);
 
-    const newRecording = await api.createRecording({
+    await api.createRecording({
       url: form.url,
       ...metadataPayload(),
       quality: form.quality,
@@ -454,7 +454,6 @@ async function handleAddRecording(): Promise<void> {
       stop_at: stopDate.toISOString(),
     });
 
-    recordings.value.unshift(newRecording as unknown as Recording);
     resetForm();
     toast("Recording scheduled");
   } catch (err) {
@@ -478,7 +477,7 @@ async function handleAddRecordingNow(): Promise<void> {
     const startDate = new Date();
     const stopDate = new Date(startDate.getTime() + (parseDurationMinutes(form.duration) ?? 70) * 60_000);
 
-    const newRecording = await api.createRecording({
+    await api.createRecording({
       url: form.url,
       ...metadataPayload(),
       quality: form.quality,
@@ -486,7 +485,6 @@ async function handleAddRecordingNow(): Promise<void> {
       stop_at: stopDate.toISOString(),
     });
 
-    recordings.value.unshift(newRecording as unknown as Recording);
     resetForm();
     toast("Recording started");
   } catch (err) {
@@ -552,7 +550,6 @@ async function handleCancel(id: string): Promise<void> {
   try {
     error.value = null;
     await api.cancelRecording(id);
-    recordings.value = recordings.value.filter((rec) => rec.id !== id);
     toast("Recording cancelled");
   } catch (err) {
     console.error("Failed to cancel recording:", err);
@@ -564,13 +561,9 @@ async function handleCancel(id: string): Promise<void> {
 async function handleStartNow(id: string): Promise<void> {
   try {
     error.value = null;
-    const result = await api.patchRecording(id, {
+    await api.patchRecording(id, {
       start_at: new Date().toISOString(),
     });
-    const idx = recordings.value.findIndex((rec) => rec.id === id);
-    if (idx >= 0) {
-      recordings.value[idx] = result.recording as unknown as Recording;
-    }
     toast("Recording started");
   } catch (err) {
     console.error("Failed to start recording:", err);
@@ -583,13 +576,9 @@ async function handleStopEarly(id: string): Promise<void> {
   stoppingIds.value.add(id);
   try {
     error.value = null;
-    const result = await api.patchRecording(id, {
+    await api.patchRecording(id, {
       stop_at: new Date().toISOString(),
     });
-    const idx = recordings.value.findIndex((rec) => rec.id === id);
-    if (idx >= 0) {
-      recordings.value[idx] = result.recording as unknown as Recording;
-    }
     toast("Recording stopped");
   } catch (err) {
     console.error("Failed to stop recording:", err);
@@ -615,13 +604,9 @@ async function saveExtend(id: string): Promise<void> {
   try {
     error.value = null;
     const stopDate = new Date(extendForm.stop);
-    const result = await api.patchRecording(id, {
+    await api.patchRecording(id, {
       stop_at: stopDate.toISOString(),
     });
-    const idx = recordings.value.findIndex((rec) => rec.id === id);
-    if (idx >= 0) {
-      recordings.value[idx] = result.recording as unknown as Recording;
-    }
     extendingId.value = null;
     toast("Recording extended");
   } catch (err) {
@@ -663,15 +648,6 @@ async function saveEdit(id: string): Promise<void> {
     }
 
     await api.patchRecording(id, payload);
-
-    const idx = recordings.value.findIndex((rec) => rec.id === id);
-    if (idx >= 0) {
-      recordings.value[idx].title = editForm.title;
-      if (editingRecording.value?.status !== 'recording') {
-        recordings.value[idx].startAt = startDate.toISOString();
-      }
-      recordings.value[idx].stopAt = stopDate.toISOString();
-    }
 
     editingId.value = null;
     toast("Recording updated");
