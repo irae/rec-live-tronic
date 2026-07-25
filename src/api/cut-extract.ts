@@ -17,13 +17,12 @@ export interface CutSegment {
 // entirely and was verified to produce the correct segment length. Offsets
 // are argv entries only -- never interpolated into a shell string --
 // mirroring streamlink-command.ts.
-// -f mpegts is required, not cosmetic: without it ffmpeg picks the output
-// muxer from the output filename's extension, and the working ".ts.tmp"
-// name (written before an atomic rename to the final ".ts" path) has no
-// extension ffmpeg recognizes, so it refuses to open the output at all
-// ("Unable to choose an output format" / "Invalid argument").
+// -f mp4 is required with -movflags +faststart: without it, ffmpeg picks the
+// output muxer from the output filename's extension, and the working ".mp4.tmp"
+// name (written before an atomic rename to the final ".mp4" path) would have no
+// extension ffmpeg recognizes, so it refuses to open the output at all.
 export function buildExtractArgv(sourcePath: string, segment: CutSegment, outputPath: string): string[] {
-  return ["-y", "-ss", formatOffset(segment.start), "-i", sourcePath, "-t", formatOffset(segment.end - segment.start), "-c", "copy", "-f", "mpegts", outputPath];
+  return ["-y", "-ss", formatOffset(segment.start), "-i", sourcePath, "-t", formatOffset(segment.end - segment.start), "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath];
 }
 
 // -ss's fast/keyframe seek + -c copy seeks the VIDEO stream to its nearest

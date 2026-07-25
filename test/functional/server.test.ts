@@ -1485,7 +1485,7 @@ t.test("creates a trim cut draft with one preview piece from a finished recordin
   t.equal(body.draft.pieces.length, 1);
   t.match(body.draft.pieces[0], { index: 0, start: "0:05:00", end: "0:10:00", duration: "0:05:00" });
   const { existsSync } = await import("node:fs");
-  t.ok(existsSync(join(root, "recordings", id, "piece-0.ts")));
+  t.ok(existsSync(join(root, "recordings", id, "piece-0.mp4")));
   t.equal(existsSync(join(root, "recordings", `${id}.ts`)), true);
 });
 
@@ -1505,7 +1505,7 @@ t.test("creates a split cut draft with N+1 preview pieces", async (t) => {
   t.equal(body.draft.pieces.length, 3);
   const { existsSync } = await import("node:fs");
   for (let index = 0; index < 3; index += 1) {
-    t.ok(existsSync(join(root, "recordings", id, `piece-${index}.ts`)));
+    t.ok(existsSync(join(root, "recordings", id, `piece-${index}.mp4`)));
   }
 });
 
@@ -1590,8 +1590,8 @@ t.test("regenerating a cut for a source reuses its single active draft (no secon
   t.equal(secondBody.draft.mode, "split");
   t.equal(secondBody.draft.pieces.length, 3);
   const { existsSync, readdirSync } = await import("node:fs");
-  t.equal(existsSync(join(root, "recordings", id, "piece-0.ts")), true);
-  t.same(readdirSync(join(root, "recordings", id)).sort(), ["piece-0.ts", "piece-1.ts", "piece-2.ts"]);
+  t.equal(existsSync(join(root, "recordings", id, "piece-0.mp4")), true);
+  t.same(readdirSync(join(root, "recordings", id)).sort(), ["piece-0.mp4", "piece-1.mp4", "piece-2.mp4"]);
 });
 
 t.test("range-serves a preview piece for playback", async (t) => {
@@ -1607,7 +1607,7 @@ t.test("range-serves a preview piece for playback", async (t) => {
   const body = await response.json() as { draft: { id: string; pieces: { file_url: string }[] } };
   const pieceResponse = await fetch(`${base}${body.draft.pieces[0]!.file_url}`);
   t.equal(pieceResponse.status, 200);
-  t.equal(pieceResponse.headers.get("Content-Type"), "video/mp2t");
+  t.equal(pieceResponse.headers.get("Content-Type"), "video/mp4");
   t.equal(await pieceResponse.text(), `source content for ${id}`);
   const missingPiece = await fetch(`${base}/recordings/${id}/cut/${body.draft.id}/pieces/99/file`);
   t.equal(missingPiece.status, 404);
@@ -1657,7 +1657,7 @@ t.test("keep promotes selected pieces to recorded recordings with cut_from_id se
   t.equal(derived.url, source.recording.url);
   t.equal(derived.quality, source.recording.quality);
   const { existsSync } = await import("node:fs");
-  t.equal(existsSync(join(root, "recordings", `${derived.id}.ts`)), true);
+  t.equal(existsSync(join(root, "recordings", `${derived.id}.mp4`)), true);
   t.equal(existsSync(join(root, "recordings", id)), false);
 });
 
@@ -1868,8 +1868,8 @@ t.test("rejects an invalid title override without orphaning renamed piece files"
   // Every kept piece file must still be present under its original name --
   // a validation failure must not have renamed any of them out from under
   // the still-previewing draft.
-  t.equal(existsSync(join(root, "recordings", id, "piece-0.ts")), true);
-  t.equal(existsSync(join(root, "recordings", id, "piece-1.ts")), true);
+  t.equal(existsSync(join(root, "recordings", id, "piece-0.mp4")), true);
+  t.equal(existsSync(join(root, "recordings", id, "piece-1.mp4")), true);
   const stillPreviewing = await fetch(`${base}/recordings/${id}/cut/${draft.id}/keep`, {
     method: "POST",
     headers: { "content-type": "application/json" },

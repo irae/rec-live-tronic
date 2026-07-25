@@ -47,7 +47,7 @@ t.test("pickKeyframeAtOrBefore", (t) => {
 t.test("extractSegment writes a real, non-empty file to a .tmp-suffixed output path", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "rec-live-tronic-cut-extract-"));
   const sourcePath = join(root, "source.ts");
-  const outputPath = join(root, "piece-0.ts.tmp");
+  const outputPath = join(root, "piece-0.mp4.tmp");
   try {
     // Synthesize a tiny real MPEG-TS source (2s, 1 keyframe) so this test
     // exercises real ffmpeg muxer/format detection, not a stub -- the

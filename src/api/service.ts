@@ -207,7 +207,7 @@ export class RecorderService {
 
   // Creates the source's active cut draft, or -- if one already exists --
   // regenerates its preview pieces in place (the Adjust loop). Every -c copy
-  // extraction lands in recordingsDir/${sourceId}/piece-<index>.ts; the
+  // extraction lands in recordingsDir/${sourceId}/piece-<index>.mp4; the
   // source row and its .ts are never touched.
   async createCutDraft(sourceId: string, input: unknown): Promise<{ draft: CutDraftResponse }> {
     const source = this.recordings.getById(sourceId);
@@ -222,7 +222,7 @@ export class RecorderService {
     const existing = this.cutDrafts.getActiveBySource(sourceId);
 
     // Extract every segment to a .tmp path first. Only once ALL segments have
-    // extracted successfully do we rename them into their final piece-N.ts
+    // extracted successfully do we rename them into their final piece-N.mp4
     // names and update the draft row -- a failure partway through (ffmpeg
     // error, seek timeout) must leave any existing previewing draft and its
     // old piece files completely untouched, not a mix of new/partial/old.
@@ -230,7 +230,7 @@ export class RecorderService {
     try {
       for (let index = 0; index < parsed.segments.length; index += 1) {
         const segment = parsed.segments[index]!;
-        const tmpPath = join(workingDir, `piece-${index}.ts.tmp`);
+        const tmpPath = join(workingDir, `piece-${index}.mp4.tmp`);
         tmpPaths.push(tmpPath);
         await extractSegment(this.config.ffmpegBin, source.tsPath, segment, tmpPath, this.config.ffprobeBin);
       }
@@ -239,13 +239,15 @@ export class RecorderService {
       throw error;
     }
     for (let index = 0; index < parsed.segments.length; index += 1) {
-      await rename(join(workingDir, `piece-${index}.ts.tmp`), join(workingDir, `piece-${index}.ts`));
+      await rename(join(workingDir, `piece-${index}.mp4.tmp`), join(workingDir, `piece-${index}.mp4`));
     }
     // A piece-count-reducing Adjust can leave stale higher-index piece files
     // from the previous, larger set -- remove them now that the new set is
-    // fully in place.
+    // fully in place. Drafts spanning the deploy might have both .ts and .mp4
+    // files for the same index, so clean up both names (tolerating ENOENT).
     if (existing && existing.pieceCount > parsed.segments.length) {
       for (let index = parsed.segments.length; index < existing.pieceCount; index += 1) {
+        await rm(join(workingDir, `piece-${index}.mp4`), { force: true }).catch(() => undefined);
         await rm(join(workingDir, `piece-${index}.ts`), { force: true }).catch(() => undefined);
       }
     }
@@ -282,7 +284,7 @@ export class RecorderService {
     if (!draft || draft.sourceId !== sourceId) throw new AppError("NOT_FOUND", 404, "Cut draft not found");
     const index = Number(indexRaw);
     if (!Number.isInteger(index) || index < 0 || index >= draft.pieceCount) throw new AppError("NOT_FOUND", 404, "Cut piece not found");
-    return { filePath: join(draft.workingDir, `piece-${index}.ts`) };
+    return { filePath: join(draft.workingDir, `piece-${index}.mp4`) };
   }
 
   // Promotes selected preview pieces of a previewing draft to first-class
@@ -376,8 +378,8 @@ export class RecorderService {
     // piece files and create their recording rows.
     const derived: Recording[] = [];
     for (const { index, newId, title, artist, venue, event, stage, startAt, stopAt } of toPromote) {
-      const piecePath = join(draft.workingDir, `piece-${index}.ts`);
-      const destPath = join(this.config.recordingsDir, `${newId}.ts`);
+      const piecePath = join(draft.workingDir, `piece-${index}.mp4`);
+      const destPath = join(this.config.recordingsDir, `${newId}.mp4`);
       await rename(piecePath, destPath);
       const created = this.recordings.create({
         id: newId,
