@@ -10,6 +10,7 @@ Restart=on-failure
 RestartSec=2s
 User=rec-live-tronic
 Group=rec-live-tronic
+SupplementaryGroups=rec-media
 UMask=0077
 WorkingDirectory=/opt/rec-live-tronic/reconciler
 EnvironmentFile=/etc/rec-live-tronic/rec-live-tronic.env

@@ -7,6 +7,7 @@ Wants=user@@SERVICE_UID@.service
 Type=simple
 User=rec-live-tronic
 Group=rec-live-tronic
+SupplementaryGroups=rec-media
 UMask=0027
 WorkingDirectory=/opt/rec-live-tronic/web
 EnvironmentFile=/etc/rec-live-tronic/rec-live-tronic.env

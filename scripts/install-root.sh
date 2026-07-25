@@ -165,6 +165,14 @@ if [ "$FULL" = true ]; then
   getent group "$SERVICE_GROUP" >/dev/null || groupadd --system "$SERVICE_GROUP"
   getent passwd "$SERVICE_USER" >/dev/null || useradd --system --gid "$SERVICE_GROUP" --home-dir "$DATA_DIR" --shell /usr/sbin/nologin --comment 'rec-live-tronic service' "$SERVICE_USER"
   getent group "$MEDIA_GROUP" >/dev/null || groupadd --system "$MEDIA_GROUP"
+  # The service account itself must be a rec-media member, not just the
+  # optional human --media-user: chmod(2) silently drops a setgid request
+  # (no error) whenever the calling process's effective/supplementary
+  # groups don't include the target's group -- so without this, the app's
+  # own openDatabase() chmodSync(dir, 02770) "succeeds" but the setgid bit
+  # never actually lands, which post-install verification then catches as
+  # "incorrect data directory mode".
+  usermod -a -G "$MEDIA_GROUP" "$SERVICE_USER"
   [ -z "$MEDIA_USER" ] || usermod -a -G "$MEDIA_GROUP" "$MEDIA_USER"
 
   log "create configuration and application paths"
