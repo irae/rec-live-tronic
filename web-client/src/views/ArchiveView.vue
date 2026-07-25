@@ -7,18 +7,32 @@
     </section>
 
     <div class="toolbar">
-      <p class="eyebrow">Recorded sets <span class="count">{{ recordings.length }}</span></p>
-      <button
-        type="button"
-        class="delete-toggle"
-        :class="{ 'delete-toggle--active': deleteMode }"
-        @click="deleteMode = !deleteMode"
-      >{{ deleteMode ? "Done" : "🗑 Quick delete" }}</button>
+      <p class="eyebrow">Recorded sets <span class="count">{{ sortedRecordings.length }}</span></p>
+      <div class="toolbar-controls">
+        <button
+          type="button"
+          class="delete-toggle"
+          :class="{ 'delete-toggle--active': deleteMode }"
+          @click="deleteMode = !deleteMode"
+        >{{ deleteMode ? "Done" : "🗑 Quick delete" }}</button>
+        <select
+          v-model="sortBy"
+          class="sort-select"
+          aria-label="Sort recordings by"
+        >
+          <option value="created">Date created</option>
+          <option value="recorded">Date recorded</option>
+          <option value="title">Title</option>
+          <option value="artist">Artist</option>
+          <option value="venue">Venue</option>
+          <option value="event">Event</option>
+        </select>
+      </div>
     </div>
 
     <RecordingList
-      :recordings="recordings"
-      :empty-message="recordings.length === 0 ? 'No finished recordings yet.' : ''"
+      :recordings="sortedRecordings"
+      :empty-message="sortedRecordings.length === 0 ? 'No finished recordings yet.' : ''"
       :delete-mode="deleteMode"
       @select="selectRecording"
       @delete="handleDelete"
@@ -29,7 +43,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from "vue";
 import { useRouter } from "vue-router";
-import { api, recordings as sharedRecordings } from "../api";
+import { api, recordings as sharedRecordings, type Recording } from "../api";
 import RecordingList from "../components/RecordingList.vue";
 import { useToast } from "../composables/useToast";
 
@@ -42,6 +56,92 @@ const router = useRouter();
 const recordings = computed(() => sharedRecordings.value.filter((rec) => rec.status === "recorded"));
 const deleteMode = ref(false);
 const deletingIds = ref<Set<string>>(new Set());
+const sortBy = ref<"created" | "recorded" | "title" | "artist" | "venue" | "event">("created");
+
+// Best-effort extraction of artist from title (assumed to be first segment).
+// Looks for " - " or " @ " as separators, treating the part before the first
+// one as the artist (e.g. "Artist Name - Set Title" or "Artist @ Venue").
+function extractArtistFromTitle(title: string): string | null {
+  const dashIndex = title.indexOf(" - ");
+  const atIndex = title.indexOf(" @ ");
+  let splitIndex = -1;
+
+  if (dashIndex >= 0 && atIndex >= 0) {
+    splitIndex = Math.min(dashIndex, atIndex);
+  } else if (dashIndex >= 0) {
+    splitIndex = dashIndex;
+  } else if (atIndex >= 0) {
+    splitIndex = atIndex;
+  }
+
+  return splitIndex >= 0 ? title.substring(0, splitIndex).trim() : null;
+}
+
+// Best-effort extraction of venue from title (assumed to be after "@").
+// Only returns a value if an "@" is present, otherwise null (don't invent a venue).
+function extractVenueFromTitle(title: string): string | null {
+  const atIndex = title.indexOf(" @ ");
+  if (atIndex < 0) return null;
+  return title.substring(atIndex + 3).trim();
+}
+
+// Get the effective value for sorting: use the field if present, else try
+// best-effort extraction from title, else null. Values that are null or empty
+// string sort last (after all real/extracted values).
+function getArtistValue(rec: Recording): string {
+  if (rec.artist) return rec.artist;
+  const extracted = extractArtistFromTitle(rec.title);
+  return extracted || "￿"; // Sort empty/null last by using max Unicode char
+}
+
+function getVenueValue(rec: Recording): string {
+  if (rec.venue) return rec.venue;
+  const extracted = extractVenueFromTitle(rec.title);
+  return extracted || "￿"; // Sort empty/null last
+}
+
+function compareRecordings(a: Recording, b: Recording): number {
+  switch (sortBy.value) {
+    case "created":
+      // Default: preserve server order (no-op sort)
+      return 0;
+
+    case "recorded":
+      // Sort by startAt DESC (most recent event first)
+      return new Date(b.startAt).getTime() - new Date(a.startAt).getTime();
+
+    case "title":
+      // Sort alphabetically ASC (case-insensitive)
+      return a.title.localeCompare(b.title, undefined, { sensitivity: "base" });
+
+    case "artist":
+      // Sort alphabetically ASC (case-insensitive), with null/empty last
+      return getArtistValue(a).localeCompare(getArtistValue(b), undefined, {
+        sensitivity: "base",
+      });
+
+    case "venue":
+      // Sort alphabetically ASC (case-insensitive), with null/empty last
+      return getVenueValue(a).localeCompare(getVenueValue(b), undefined, {
+        sensitivity: "base",
+      });
+
+    case "event":
+      // Sort alphabetically ASC (case-insensitive)
+      const eventA = a.event || "￿";
+      const eventB = b.event || "￿";
+      return eventA.localeCompare(eventB, undefined, { sensitivity: "base" });
+
+    default:
+      return 0;
+  }
+}
+
+const sortedRecordings = computed(() => {
+  const copy = [...recordings.value];
+  copy.sort(compareRecordings);
+  return copy;
+});
 
 onMounted(async () => {
   try {
@@ -151,6 +251,13 @@ async function handleDelete(id: string): Promise<void> {
   color: var(--fluoro);
 }
 
+.toolbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
 .delete-toggle {
   flex-shrink: 0;
   font-family: var(--mono);
@@ -177,6 +284,39 @@ async function handleDelete(id: string): Promise<void> {
   background: var(--fluoro);
   border-color: var(--fluoro);
   color: #fff;
+}
+
+.sort-select {
+  flex-shrink: 0;
+  font-family: var(--mono);
+  font-weight: 700;
+  font-size: 10.5px;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  border: 2px solid var(--line);
+  background: var(--paper);
+  color: var(--ink-soft);
+  padding: 7px 12px;
+  cursor: pointer;
+  transition: all .12s;
+}
+
+.sort-select:hover {
+  border-color: var(--fluoro);
+  color: var(--fluoro);
+  box-shadow: 2px 2px 0 var(--ink);
+  transform: translate(-1px, -1px);
+}
+
+.sort-select:focus {
+  outline: none;
+  border-color: var(--fluoro);
+  color: var(--fluoro);
+}
+
+.sort-select option {
+  background: var(--paper);
+  color: var(--ink);
 }
 
 @keyframes pulse {
