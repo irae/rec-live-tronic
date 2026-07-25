@@ -1084,6 +1084,31 @@ t.test("sets an inline Content-Disposition with the recording's title on the pla
   );
 });
 
+t.test("serves a .ts recording with video/mp2t Content-Type and .ts filename", async (t) => {
+  const address = running.publicServer.address();
+  if (!address || typeof address === "string") return t.fail("no public listener");
+  const base = `http://127.0.0.1:${address.port}`;
+  const id = await createFinishedRecording(base, "ts file serving test");
+
+  const inlineResponse = await fetch(`${base}/recordings/${id}/file`);
+  t.equal(inlineResponse.status, 200);
+  t.equal(inlineResponse.headers.get("Content-Type"), "video/mp2t", "inline request should have video/mp2t Content-Type");
+  t.match(
+    inlineResponse.headers.get("Content-Disposition"),
+    /^inline; filename="ts file serving test\.ts"$/,
+    "inline request should have .ts filename"
+  );
+
+  const downloadResponse = await fetch(`${base}/recordings/${id}/file?download=1`);
+  t.equal(downloadResponse.status, 200);
+  t.equal(downloadResponse.headers.get("Content-Type"), "video/mp2t", "download request should have video/mp2t Content-Type");
+  t.match(
+    downloadResponse.headers.get("Content-Disposition"),
+    /^attachment; filename="ts file serving test\.ts"$/,
+    "download request should have .ts filename"
+  );
+});
+
 t.test("serves a trashed recording's file for download", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");

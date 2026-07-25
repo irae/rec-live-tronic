@@ -1,7 +1,7 @@
 import type { ErrorRequestHandler, NextFunction, Request, RequestHandler, Response } from "express";
 import express from "express";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { statfs } from "node:fs/promises";
 import type { RecorderService } from "./api/service.js";
@@ -42,15 +42,15 @@ type MulterFactory = ((options: { storage: unknown; limits: { fileSize: number; 
 const require = createRequire(import.meta.url);
 const multer = require("multer") as MulterFactory;
 
-function sanitizeFilename(title: string): string {
+function sanitizeFilename(title: string, extension: string): string {
   // Replace unsafe characters and collapse whitespace
   const sanitized = title
     .replace(/[^a-zA-Z0-9._\- ]/g, "") // Remove non-ASCII-safe characters
     .replace(/\s+/g, " ") // Collapse multiple spaces
     .trim()
     .slice(0, 200); // Reasonable length cap
-  // Append .ts extension
-  return sanitized ? `${sanitized}.ts` : "";
+  // Append the provided extension
+  return sanitized ? `${sanitized}${extension}` : "";
 }
 
 function errorHandler(error: unknown, request: Request, response: Response, _next: NextFunction): void {
@@ -165,9 +165,11 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
       // treated as a dotfile and 404s internally. Production's recordingsDir
       // (/srv/rec-live-tronic/recordings) has no dot segments, but allow them
       // explicitly since this path is server-constructed, not user input.
-      const headers: { "Content-Type": string; "Content-Disposition"?: string } = { "Content-Type": "video/mp2t" };
-      const sanitized = sanitizeFilename(title);
-      const filename = sanitized || `${request.params.id}.ts`;
+      const extension = extname(tsPath);
+      const contentType = extension === ".mp4" ? "video/mp4" : "video/mp2t";
+      const headers: { "Content-Type": string; "Content-Disposition"?: string } = { "Content-Type": contentType };
+      const sanitized = sanitizeFilename(title, extension);
+      const filename = sanitized || `${request.params.id}${extension}`;
       headers["Content-Disposition"] = request.query.download === "1" ? `attachment; filename="${filename}"` : `inline; filename="${filename}"`;
       response.sendFile(tsPath, { headers, dotfiles: "allow" }, (error) => {
         if (error) next(error);
@@ -182,7 +184,9 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
   app.get("/recordings/:id/cut/:draftId/pieces/:index/file", (request, response, next) => {
     try {
       const { filePath } = recorder.getCutPieceFile(request.params.id, request.params.draftId, request.params.index);
-      response.sendFile(filePath, { headers: { "Content-Type": "video/mp2t" }, dotfiles: "allow" }, (error) => {
+      const extension = extname(filePath);
+      const contentType = extension === ".mp4" ? "video/mp4" : "video/mp2t";
+      response.sendFile(filePath, { headers: { "Content-Type": contentType }, dotfiles: "allow" }, (error) => {
         if (error) next(error);
       });
     } catch (error) { next(error); }
