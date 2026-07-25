@@ -1,12 +1,10 @@
 # YouTube Live Recorder — Architecture Spec
 
 Architecture specification, describing the current decided state through
-Phase 6 / v0.6.0 (the MP4 transition — fully planned and being implemented
-now; this document deliberately describes that end-state as the
-architecture). It reflects decided state, not the history of how it was
-reached — see `CHANGELOG.md` and git log for that. Extend it before
-implementing anything in Phase 7 or later; phase numbering follows
-`plan.md`.
+Phase 6 / v0.6.0 (the MP4 transition). It reflects decided state, not the
+history of how it was reached — see `CHANGELOG.md` and git log for that.
+Extend it before implementing anything in Phase 7 or later; phase numbering
+follows `plan.md`.
 
 ## Core durable traits
 
@@ -96,7 +94,8 @@ The reconciler's job ends at `recorded`. The MP4 remux is API-side: when a
 transition lands `recorded`, the API fires an in-process one-shot
 `ffmpeg -c copy -movflags +faststart` remux of the `.ts` into `<id>.mp4`,
 verifies the output with ffprobe (duration match, both streams present), then
-re-points `ts_path` at the `.mp4` and removes the `.ts`. A failed or
+re-points `ts_path` at the `.mp4`. The source `.ts` is kept on disk as a
+safety net (its removal is deferred, later work — see Phase 6b). A failed or
 unverified remux keeps the `.ts` in place and served (extension-aware file
 route), with the real error logged — remux failure never breaks serving.
 
@@ -153,8 +152,10 @@ Content-Type and filename extension are derived from the actual file
 (`.mp4` → `video/mp4`; a not-yet/failed-remux `.ts` → `video/mp2t`), so
 serving never depends on remux success. Serving a still-recording/growing
 file is a non-goal. `POST /recordings/backfill-mp4` — idempotent maintenance
-route that remuxes any remaining `.ts`-backed rows (and, with
-`{"delete_ts":true}`, removes verified leftover `.ts` siblings).
+route that remuxes any remaining `.ts`-backed rows (including trashed ones),
+tallying `{ "remuxed": <n>, "skipped": <n>, "failed": ["<id>", …] }`; every
+source `.ts` is kept on disk (deleting them is deferred, later Phase 6b
+work).
 
 Ops: `GET /health`. *(`GET /recordings/:id/log`, to tail streamlink output over HTTP, is deliberately not built — the per-recording log file is directly readable over SSH via the `rec-media` group, see AGENTS.md.)*
 
@@ -181,9 +182,10 @@ Numbering matches `plan.md`; completed phases are summarized per-milestone in
   post-ship UX batch.
 - **Phase 5 (done):** the Cut workflow — preview-then-promote Trim/Split with
   lineage.
-- **Phase 6 (v0.6.0, this spec's state):** the MP4 transition — post-capture
-  faststart MP4 remux, extension-aware serving, plain-`<video>` playback,
-  `mpegts.js` removed, one-time backfill of pre-existing recordings.
+- **Phase 6 (done, v0.6.0, this spec's state):** the MP4 transition —
+  post-capture faststart MP4 remux, extension-aware serving, plain-`<video>`
+  playback, `mpegts.js` removed, one-time backfill of pre-existing
+  recordings.
 - **Phase 7:** audio-only capture and playback behind a global toggle.
 - **Phase 8:** candidates (bulk schedule import → promote) — research first.
 - **Deferred, unordered** (see plan.md's lowest-priority section): demux

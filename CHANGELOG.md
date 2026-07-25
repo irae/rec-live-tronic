@@ -65,3 +65,15 @@ pieces to first-class `recorded` rows with lineage (`cut_from_id`), real
 wall-clock dates, and full per-piece metadata overrides. Plus the follow-up
 UX pass: per-piece VLC links, friendly file URLs, source renamed + trashed on
 Keep, full-width console, unified 60s polling, Archive sort control.
+
+## Beta 6 — the MP4 transition (`0.6.0`)
+
+Finished recordings are now served as faststart MP4 instead of raw MPEG-TS:
+an in-process one-shot `ffmpeg -c copy -movflags +faststart` stream-copy
+remux runs automatically when a recording lands `recorded`, verified with
+ffprobe (duration match, both streams present), plus a one-time idempotent
+`POST /recordings/backfill-mp4` sweep to remux every pre-existing recording.
+Cut/Split pieces are now extracted natively as `.mp4` rather than remuxed
+after the fact. `mpegts.js` is dropped entirely — every player is a plain
+`<video>` element. Every `.ts` file is kept on disk as a safety net (no
+deletion in this phase — that's separate, later Phase 6b work).
