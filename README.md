@@ -3,6 +3,15 @@
 `rec-live-tronic` is a curl-first YouTube live recorder. Phase 0 records
 append-safe transport streams through Streamlink and systemd.
 
+## Web client
+
+A Vue 3 single-page app (built by Vite, served as static files by the same
+Express API) covers scheduling, the archive, playback, cutting, and the trash
+bin. How the client is organized — routing, the shared-state pattern,
+component layout, and the conventions to follow when changing it — is
+documented in `docs/frontend-architecture.md`. Dev-server commands live in
+`AGENTS.md`.
+
 ## Requirements
 
 - Node.js 24.x and npm (the service rejects other Node majors at startup).
