@@ -43,7 +43,7 @@
             :disabled="restoringIds.has(rec.id) || deletingIds.has(rec.id)"
             @click.prevent="handleRestore(rec.id)"
           >↺ {{ restoringIds.has(rec.id) ? "Restoring…" : "Restore" }}</button>
-          <a class="tbtn" :href="downloadUrl(rec.id, rec.title)">⬇ Download .ts</a>
+          <a class="tbtn" :href="downloadUrl(rec.id, rec.title)">⬇ Download .mp4</a>
           <button
             class="tbtn tbtn--stop"
             :disabled="restoringIds.has(rec.id) || deletingIds.has(rec.id)"

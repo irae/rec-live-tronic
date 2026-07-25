@@ -75,13 +75,9 @@
             </div>
             <div class="mini">
               <span class="mini__tag">rough cut · preview</span>
-              <video :ref="(el) => setPieceEl(piece.index, el as HTMLVideoElement | null)" controls class="mini-video"></video>
+              <video :src="piece.file_url" controls class="mini-video"></video>
             </div>
 
-            <!-- mpegts.js's default lazyLoad can't reliably show/seek to the
-                 end of a large preview file, so VLC (which streams the raw
-                 file directly) is the real way to verify a cut's full
-                 length before Keep -- see CLAUDE.md's player notes. -->
             <div class="piece-url">
               <code>{{ pieceStreamUrl(piece) }}</code>
               <button type="button" class="copy" @click="copyPieceUrl(piece)" :class="{ done: pieceCopyDone[piece.index] }">{{ pieceCopyDone[piece.index] ? "Copied ✓" : "Copy" }}</button>
@@ -133,8 +129,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, nextTick, onUnmounted } from "vue";
-import mpegts from "mpegts.js";
+import { ref, watch } from "vue";
 import { api, type CutDraft, type CutPiece, type Recording } from "../api";
 import { parseOffsetInput, formatOffsetSeconds } from "../lib/cut-offsets";
 import { isIosDevice, isMacDevice, vlcUrlFor } from "../lib/vlc";
@@ -186,10 +181,6 @@ const pieceCopyDone = ref<Record<number, boolean>>({});
 const isIos = isIosDevice();
 const isMac = isMacDevice();
 
-const useMpegts = mpegts.isSupported();
-const piecePlayers = new Map<number, ReturnType<typeof mpegts.createPlayer>>();
-const pieceEls = new Map<number, HTMLVideoElement>();
-
 watch(phase, (value) => emit("phase-change", value === "mark" && !open.value ? "closed" : phase.value));
 watch(open, (value) => emit("phase-change", value ? phase.value : "closed"));
 
@@ -206,7 +197,6 @@ function closeConsole(): void {
     draftId.value = null;
     draft.value = null;
   }
-  destroyPiecePlayers();
   pieceForms.value = {};
   open.value = false;
   phase.value = "mark";
@@ -294,8 +284,6 @@ async function makeCut(): Promise<void> {
       result.pieces.map((p) => [p.index, defaultsForPiece(p.index, result.mode)]),
     );
     phase.value = "preview";
-    await nextTick();
-    setupPiecePlayers();
   } catch (error) {
     console.error("Failed to create cut draft:", error);
     markError.value = error instanceof Error ? error.message : "Failed to make the cut";
@@ -306,7 +294,6 @@ async function makeCut(): Promise<void> {
 }
 
 function adjust(): void {
-  destroyPiecePlayers();
   phase.value = "mark";
 }
 
@@ -338,7 +325,6 @@ async function keep(): Promise<void> {
       overrides,
     };
     const recordings = await api.keepCutDraft(props.recordingId, draftId.value, body);
-    destroyPiecePlayers();
     draftId.value = null;
     draft.value = null;
     pieceForms.value = {};
@@ -369,47 +355,6 @@ async function copyPieceUrl(piece: CutPiece): Promise<void> {
   }, 1600);
 }
 
-function setPieceEl(index: number, el: HTMLVideoElement | null): void {
-  if (el) pieceEls.set(index, el);
-  else pieceEls.delete(index);
-}
-
-function setupPiecePlayers(): void {
-  if (!draft.value) return;
-  for (const piece of draft.value.pieces) {
-    const el = pieceEls.get(piece.index);
-    if (!el) continue;
-    if (!useMpegts) {
-      el.src = piece.file_url;
-      continue;
-    }
-    const player = mpegts.createPlayer({ type: "mpegts", url: piece.file_url, isLive: false }, {});
-    player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
-      console.error("mpegts.js piece playback error:", piece.index, type, detail);
-    });
-    player.attachMediaElement(el);
-    player.load();
-    piecePlayers.set(piece.index, player);
-  }
-}
-
-function destroyPiecePlayers(): void {
-  for (const player of piecePlayers.values()) {
-    try {
-      player.pause();
-      player.unload();
-      player.detachMediaElement();
-      player.destroy();
-    } catch (error) {
-      console.error("Failed to tear down a piece player:", error);
-    }
-  }
-  piecePlayers.clear();
-}
-
-onUnmounted(() => {
-  destroyPiecePlayers();
-});
 </script>
 
 <style scoped>

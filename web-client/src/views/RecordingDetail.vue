@@ -16,13 +16,7 @@
                 <span>{{ extractFestival(recording.title) ? extractFestival(recording.title) : recording.stage || "Stage" }}</span>
                 <span class="rec"><span class="blip"></span>archived</span>
               </div>
-              <video
-                v-if="useMpegts"
-                ref="videoEl"
-                controls
-                class="video-player"
-              ></video>
-              <video v-else ref="videoEl" :src="streamUrl" controls class="video-player"></video>
+              <video ref="videoEl" :src="streamUrl" controls class="video-player"></video>
             </div>
           </div>
         </div>
@@ -116,7 +110,7 @@
             @kept="onCutKept"
           />
 
-          <a v-if="recording.status === 'recorded'" class="btn btn--download" :href="downloadUrl">⬇ Download .ts</a>
+          <a v-if="recording.status === 'recorded'" class="btn btn--download" :href="downloadUrl">⬇ Download .mp4</a>
 
           <div class="trash-row">
             <button class="btn--trash" @click="handleDelete" title="Moves this recording to Trash. It stays there for 30 days — restore it any time, or purge it for good from the Trash view.">🗑 Delete</button>
@@ -132,9 +126,8 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed, onUnmounted, nextTick } from "vue";
+import { ref, watch, computed } from "vue";
 import { useRoute, useRouter } from "vue-router";
-import mpegts from "mpegts.js";
 import { api, type Recording as ApiRecording } from "../api";
 import { useToast } from "../composables/useToast";
 import CutConsole from "../components/CutConsole.vue";
@@ -216,9 +209,9 @@ function onCutKept(kept: ApiRecording[]): void {
   }
 }
 
-// Plain (no friendly-filename segment) URL for the embedded mpegts.js/<video>
-// player -- the friendly form only matters for VLC/copy-URL/external players,
-// which key off the URL path rather than the Content-Disposition header.
+// Plain (no friendly-filename segment) URL for the embedded <video> player --
+// the friendly form only matters for VLC/copy-URL/external players, which key
+// off the URL path rather than the Content-Disposition header.
 const streamUrl = computed(() => {
   if (!recordingId.value) return "";
   return `${window.location.origin}/recordings/${recordingId.value}/file`;
@@ -234,43 +227,7 @@ const downloadUrl = computed(() => {
   return fileUrl(recordingId.value, recording.value.title, { download: true });
 });
 
-// mpegts.js's own supportability check (MSE availability etc). Falls back to
-// the plain <video :src> behavior when unsupported, rather than a broken player.
-const useMpegts = mpegts.isSupported();
 const videoEl = ref<HTMLVideoElement | null>(null);
-let player: ReturnType<typeof mpegts.createPlayer> | null = null;
-
-function destroyPlayer(): void {
-  if (!player) return;
-  try {
-    player.pause();
-    player.unload();
-    player.detachMediaElement();
-    player.destroy();
-  } catch (error) {
-    console.error("Failed to tear down mpegts.js player:", error);
-  }
-  player = null;
-}
-
-function setupPlayer(): void {
-  destroyPlayer();
-  if (!useMpegts || !videoEl.value || !streamUrl.value || !recording.value) return;
-  // Accurate seek-to-end duration isn't forceable for MPEG-TS in this library
-  // (see spec.md's "Open decisions" -- both of its duration-override paths are
-  // dead ends for our demuxer). Dropped as best-effort: default lazyLoad keeps
-  // this scalable against multi-GB recordings; duration/seek just becomes
-  // fully accurate progressively as more of the file is demuxed.
-  player = mpegts.createPlayer(
-    { type: "mpegts", url: streamUrl.value, isLive: false },
-    {},
-  );
-  player.on(mpegts.Events.ERROR, (type: string, detail: string) => {
-    console.error("mpegts.js playback error:", type, detail);
-  });
-  player.attachMediaElement(videoEl.value);
-  player.load();
-}
 
 const isIos = computed(() => isIosDevice());
 const isMac = computed(() => isMacDevice());
@@ -279,7 +236,6 @@ const vlcUrl = computed(() => vlcUrlFor(friendlyStreamUrl.value));
 watch(
   () => route.params.id,
   async (id) => {
-    destroyPlayer();
     recording.value = null;
     editing.value = false;
     editError.value = null;
@@ -293,11 +249,6 @@ watch(
       if (route.params.id !== id) return;
       recording.value = loaded;
       document.title = `${recording.value.title} - RecTronic`;
-      if (recording.value.status === "recorded") {
-        await nextTick();
-        if (route.params.id !== id) return;
-        setupPlayer();
-      }
       if (recording.value.cutFromId) {
         const cutFromId = recording.value.cutFromId;
         api.getRecording(cutFromId)
@@ -314,10 +265,6 @@ watch(
   },
   { immediate: true },
 );
-
-onUnmounted(() => {
-  destroyPlayer();
-});
 
 function goBack(): void {
   router.push({ name: "archive" });

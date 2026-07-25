@@ -8,7 +8,7 @@ function sanitizeFilenameClient(title: string): string {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 200);
-  return sanitized ? `${sanitized}.ts` : "";
+  return sanitized ? `${sanitized}.mp4` : "";
 }
 
 export function fileUrl(id: string, title: string, opts?: { download?: boolean }): string {
