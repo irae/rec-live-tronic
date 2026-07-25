@@ -160,6 +160,12 @@ export class RecorderService {
     private readonly cutDrafts: CutDraftRepository,
   ) {}
 
+  // Guards against the live per-recording remux (fired from transition()) and
+  // a backfillMp4() sweep racing on the same id's .mp4.tmp file -- both would
+  // otherwise pass remuxRecording's own .ts-tsPath check before either
+  // finishes, and run ffmpeg concurrently against the same output path.
+  private readonly remuxInFlight = new Set<string>();
+
   async createRecording(input: RecordingInput): Promise<ReturnType<typeof mapRecording>> {
     const startAt = instant(input.start_at, "start_at");
     const stopAt = instant(input.stop_at, "stop_at");
@@ -632,6 +638,8 @@ export class RecorderService {
   }
 
   async remuxRecording(id: string): Promise<"remuxed" | "skipped" | "failed"> {
+    if (this.remuxInFlight.has(id)) return "skipped";
+    this.remuxInFlight.add(id);
     try {
       const recording = this.recordings.getById(id);
       if (!recording || recording.status !== "recorded" || !recording.tsPath.endsWith(".ts")) {
@@ -644,6 +652,8 @@ export class RecorderService {
     } catch (error) {
       console.error(`Failed to remux recording ${id}:`, error);
       return "failed";
+    } finally {
+      this.remuxInFlight.delete(id);
     }
   }
 

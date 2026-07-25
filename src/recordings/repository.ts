@@ -370,9 +370,15 @@ export class RecordingRepository {
     return (rows as RecordingRow[]).map(mapRecording);
   }
 
+  // Deliberately does not bump `version`: unlike patchRecording/transition,
+  // this is internal housekeeping no client ever reads or CAS-checks against,
+  // and bumping it would let a background remux (fired when the recording
+  // first became "recorded") spuriously invalidate an unrelated version-gated
+  // write racing against it -- e.g. keepCutDraft's own CAS update on the same
+  // source recording.
   updateTsPath(id: string, tsPath: string, now?: UtcInstant): void {
     const updatedAt = timestamp(now, "now");
-    this.database.prepare("UPDATE recordings SET ts_path = ?, updated_at = ?, version = version + 1 WHERE id = ?")
+    this.database.prepare("UPDATE recordings SET ts_path = ?, updated_at = ? WHERE id = ?")
       .run(tsPath, updatedAt, id);
   }
 

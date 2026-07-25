@@ -2060,18 +2060,41 @@ t.test("backfill-mp4 remuxes every remaining .ts row and re-runs clean", async (
   });
   t.equal(transitionResponse.status, 200);
 
-  // Give the fire-and-forget remux from transition time to complete if it was scheduled
-  await new Promise(resolve => setTimeout(resolve, 100));
-
-  // Call backfill-mp4
+  // Call backfill-mp4 immediately: the fire-and-forget remux from transition
+  // may or may not have already landed this row on .mp4 by now (both are
+  // racy by design -- neither the live hook nor this call awaits the other),
+  // so this only asserts the response shape and that OUR row isn't reported
+  // failed; whether it shows up as "remuxed" (backfill won the race) or
+  // "skipped" (the live hook already finished it) is not deterministic and
+  // both are correct outcomes.
   const backfillResponse = await fetch(`${base}/recordings/backfill-mp4`, { method: "POST" });
   t.equal(backfillResponse.status, 200);
   const backfillBody = await backfillResponse.json() as { remuxed: number; skipped: number; failed: string[] };
   t.equal(typeof backfillBody.remuxed, "number");
   t.equal(typeof backfillBody.skipped, "number");
   t.ok(Array.isArray(backfillBody.failed));
-  t.ok(backfillBody.remuxed >= 1);
   t.ok(!backfillBody.failed.includes(id));
+
+  // Regardless of which path won, the row must land on .mp4 -- but if
+  // backfill's own attempt lost the in-flight race to the live hook, backfill
+  // reports "skipped" without waiting for that other in-progress remux to
+  // actually finish, so poll instead of asserting on a single read. tsPath is
+  // an internal field never exposed on the public GET /recordings/:id
+  // response, so this reads it directly from the database, matching the
+  // pattern other tests in this file already use (see the trash-and-backdate
+  // test above).
+  let tsPath = "";
+  for (let attempt = 0; attempt < 20; attempt++) {
+    const checkDatabase = openDatabase(config.databasePath);
+    try {
+      tsPath = (checkDatabase.prepare("SELECT ts_path FROM recordings WHERE id = ?").get(id) as { ts_path: string }).ts_path;
+    } finally {
+      checkDatabase.close();
+    }
+    if (tsPath.endsWith(".mp4")) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+  t.ok(tsPath.endsWith(".mp4"), "row is remuxed to .mp4 shortly after backfill");
 
   // Re-run should have only skipped rows (already remuxed to .mp4)
   const secondBackfillResponse = await fetch(`${base}/recordings/backfill-mp4`, { method: "POST" });
