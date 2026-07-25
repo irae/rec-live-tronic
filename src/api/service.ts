@@ -631,6 +631,17 @@ export class RecorderService {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
       throw error;
     });
+
+    // Also unlink the sibling file with the other extension (e.g., .ts/.mp4 pair)
+    // to clean up a backfilled-then-purged recording's safety-net file.
+    const currentExt = recording.tsPath.endsWith(".mp4") ? ".mp4" : ".ts";
+    const siblingExt = currentExt === ".mp4" ? ".ts" : ".mp4";
+    const siblingPath = join(this.config.recordingsDir, `${recording.id}${siblingExt}`);
+    await unlink(siblingPath).catch((error) => {
+      if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return;
+      console.error(`Failed to unlink sibling file for ${recording.id} (${siblingPath}):`, error);
+    });
+
     await rm(join(this.config.recordingsDir, recording.id), { recursive: true, force: true }).catch((error) => {
       console.error(`Failed to remove cut working folder for ${recording.id}:`, error);
     });

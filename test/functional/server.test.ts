@@ -690,6 +690,69 @@ t.test("rejects permanent delete of a recording that is not in trash", async (t)
   t.equal(permanentResponse.status, 409);
 });
 
+t.test("permanent delete removes the .mp4 and its leftover .ts sibling", async (t) => {
+  const address = running.publicServer.address();
+  t.ok(address && typeof address !== "string");
+  if (!address || typeof address === "string") return;
+  const base = `http://127.0.0.1:${address.port}`;
+  const created = await fetch(`${base}/recordings`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      url: "https://www.youtube.com/watch?v=purge-sibling-1",
+      title: "purge sibling 1",
+      start_at: "2099-01-01T00:00:00Z",
+      stop_at: "2099-01-01T01:00:00Z",
+    }),
+  });
+  const createdBody = await created.json() as { recording: { id: string; version: number } };
+  const id = createdBody.recording.id;
+  const transitionPath = `/internal/recordings/${id}/transition`;
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "scheduled",
+    expected_version: createdBody.recording.version,
+    status: "recording",
+  });
+  const recording = await fetch(`${base}/recordings/${id}`);
+  const recordingBody = await recording.json() as { recording: { version: number } };
+
+  // Create both .ts and .mp4 files on disk to simulate a backfilled recording
+  const tsFilePath = join(root, "recordings", `${id}.ts`);
+  const mp4FilePath = join(root, "recordings", `${id}.mp4`);
+  await writeFile(tsFilePath, "test content");
+  await writeFile(mp4FilePath, "test mp4 content");
+
+  await privateRequest(join(root, "run", "api.sock"), transitionPath, {
+    expected_status: "recording",
+    expected_version: recordingBody.recording.version,
+    status: "recorded",
+  });
+
+  // Update the recording's ts_path to point to .mp4 (simulating a backfilled recording)
+  const apiDatabase = openDatabase(config.databasePath);
+  try {
+    apiDatabase.prepare("UPDATE recordings SET ts_path = ? WHERE id = ?").run(mp4FilePath, id);
+  } finally {
+    apiDatabase.close();
+  }
+
+  // Trash the recording
+  await fetch(`${base}/recordings/${id}/file`, { method: "DELETE" });
+
+  // Permanently delete it
+  const permanentResponse = await fetch(`${base}/recordings/${id}/trash`, { method: "DELETE" });
+  t.equal(permanentResponse.status, 204);
+
+  // Verify both files are gone
+  const { existsSync } = await import("node:fs");
+  t.equal(existsSync(mp4FilePath), false, ".mp4 file should be deleted");
+  t.equal(existsSync(tsFilePath), false, ".ts sibling file should be deleted");
+
+  // Verify the row is gone
+  const getAfterDelete = await fetch(`${base}/recordings/${id}`);
+  t.equal(getAfterDelete.status, 404);
+});
+
 t.test("rejects trashing a recording that is not finished", async (t) => {
   const address = running.publicServer.address();
   t.ok(address && typeof address !== "string");
