@@ -370,6 +370,12 @@ export class RecordingRepository {
     return (rows as RecordingRow[]).map(mapRecording);
   }
 
+  updateTsPath(id: string, tsPath: string, now?: UtcInstant): void {
+    const updatedAt = timestamp(now, "now");
+    this.database.prepare("UPDATE recordings SET ts_path = ?, updated_at = ?, version = version + 1 WHERE id = ?")
+      .run(tsPath, updatedAt, id);
+  }
+
   private getRequired(id: string): Recording {
     const recording = this.getById(id);
     if (recording === undefined) throw new Error(`Recording ${id} disappeared during its transaction`);
