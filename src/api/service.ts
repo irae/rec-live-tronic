@@ -13,6 +13,7 @@ import { storeCookieAtomically } from "./storage.js";
 import { extractSegment } from "./cut-extract.js";
 import { parseCutRequest } from "./cut-request.js";
 import { formatOffset } from "../recordings/cut-offsets.js";
+import { remuxToMp4 } from "./remux.js";
 
 const qualityValues = ["best", "1080p", "720p", "480p", "360p", "worst"] as const;
 const allowedYouTubeHosts = new Set(["youtube.com", "www.youtube.com", "m.youtube.com", "youtu.be"]);
@@ -628,6 +629,22 @@ export class RecorderService {
     this.recordings.purge(recording.id);
   }
 
+  async remuxRecording(id: string): Promise<"remuxed" | "skipped" | "failed"> {
+    try {
+      const recording = this.recordings.getById(id);
+      if (!recording || recording.status !== "recorded" || !recording.tsPath.endsWith(".ts")) {
+        return "skipped";
+      }
+      const outputPath = join(this.config.recordingsDir, `${id}.mp4`);
+      await remuxToMp4(this.config.ffmpegBin, this.config.ffprobeBin, recording.tsPath, outputPath);
+      this.recordings.updateTsPath(id, outputPath);
+      return "remuxed";
+    } catch (error) {
+      console.error(`Failed to remux recording ${id}:`, error);
+      return "failed";
+    }
+  }
+
   transition(input: { id: string; expected_status: unknown; expected_version: unknown; status: unknown; last_started_boot_id?: unknown; last_started_stop_at?: unknown }): ReturnType<typeof mapRecording> {
     if (!Number.isSafeInteger(input.expected_version) || (input.expected_version as number) < 0) throw new AppError("VALIDATION_ERROR", 400, "expected_version is invalid");
     const lastStartedBootId = input.last_started_boot_id === undefined ? undefined : text(input.last_started_boot_id, "last_started_boot_id", 200);
@@ -635,6 +652,9 @@ export class RecorderService {
     try {
       const result = this.recordings.compareAndSetStatus({ id: input.id, expectedStatus: requireStatus(input.expected_status), expectedVersion: input.expected_version as number, status: requireStatus(input.status), ...(lastStartedBootId === undefined ? {} : { lastStartedBootId }), ...(lastStartedStopAt === undefined ? {} : { lastStartedStopAt }) });
       if (result.outcome !== "updated") throw new AppError(result.outcome === "not_found" ? "NOT_FOUND" : "CONFLICT", result.outcome === "not_found" ? 404 : 409, "Recording transition did not apply");
+      if (result.value.status === "recorded") {
+        void this.remuxRecording(input.id);
+      }
       return mapRecording(result.value);
     } catch (error) { if (error instanceof AppError) throw error; console.error(`Failed to transition recording ${input.id}:`, error); throw new AppError("VALIDATION_ERROR", 400, error instanceof Error ? error.message : "Invalid transition"); }
   }

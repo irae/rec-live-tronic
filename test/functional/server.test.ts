@@ -36,12 +36,28 @@ t.before(async () => {
   await writeFile(ffmpeg, ffmpegStubScript, { mode: 0o755 });
   await chmod(ffmpeg, 0o755);
   // Fixtures are plain-text stand-ins, not real MPEG-TS, so a real ffprobe
-  // would fail to parse them anyway -- this stub just fails fast and
-  // deterministically, exercising extractSegment's graceful fallback to the
-  // un-snapped segment (see cut-extract.ts) instead of depending on a real
-  // ffprobe's specific error behavior on garbage input.
+  // would fail to parse them anyway -- this stub handles remux verification
+  // calls (format=duration, stream=codec_type) for the remux flow, and fails
+  // fast for other calls (like keyframe-snap's format=start_time), exercising
+  // extractSegment's graceful fallback behavior.
   const ffprobe = join(root, "ffprobe");
-  await writeFile(ffprobe, "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  const ffprobeScript = `#!/bin/sh
+case "$*" in
+  *format=duration*)
+    echo "120.0"
+    exit 0
+    ;;
+  *stream=codec_type*)
+    echo "video"
+    echo "audio"
+    exit 0
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+`;
+  await writeFile(ffprobe, ffprobeScript, { mode: 0o755 });
   await chmod(ffprobe, 0o755);
   // UserSystemdClient spawns "systemctl"/"systemd-run" by bare name (resolved
   // via PATH, not a config-provided path like streamlink/ffmpeg above), so a
