@@ -158,3 +158,4 @@ design-prototypes/*
 !design-prototypes/theme-3/
 # ...and the cut (trim/split) workflow mockup, kept as a design reference
 !design-prototypes/cut-workflow/
+db-backups/

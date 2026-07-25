@@ -29,10 +29,12 @@ function toRfc3339(milliseconds) {
   return new Date(milliseconds).toISOString();
 }
 
-// Parse cut draft params JSON and extract segments
-function parseParams(paramsJson, durationSeconds) {
+// Parse cut draft params JSON and extract segments. `mode` is the
+// cut_drafts.mode column -- it is never embedded in the params JSON itself
+// (createCutDraft stores only parseCutRequest's `.params` field, e.g.
+// { start, end } or { cuts }, with mode tracked as its own column).
+function parseParams(mode, paramsJson, durationSeconds) {
   const params = JSON.parse(paramsJson);
-  const mode = params.mode || "unknown";
 
   if (mode === "trim") {
     // trim mode: { mode: 'trim', start: '..', end: '..' }
@@ -153,7 +155,7 @@ async function main() {
 
       // Get the promoted cut draft for this source
       const draft = db
-        .prepare(`SELECT id, params, piece_count FROM cut_drafts WHERE source_id = ? AND status = 'promoted'`)
+        .prepare(`SELECT id, mode, params, piece_count FROM cut_drafts WHERE source_id = ? AND status = 'promoted'`)
         .get(sourceId);
 
       if (!draft) {
@@ -165,7 +167,7 @@ async function main() {
       let parsedDraft;
       try {
         const durationSeconds = (source.stop_at - source.start_at) / 1000;
-        parsedDraft = parseParams(draft.params, durationSeconds);
+        parsedDraft = parseParams(draft.mode, draft.params, durationSeconds);
       } catch (error) {
         skipped.push({ id: derived.id, title: derived.title, reason: `Failed to parse draft params: ${error.message}` });
         continue;
