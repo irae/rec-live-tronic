@@ -15,12 +15,12 @@ export interface ReconcileDependencies {
   config: Config;
   recordings: { list(): Recording[] };
   systemd: SystemdClient;
-  transition(recording: Recording, status: RecordingStatus, bootId?: string, startedStopAt?: string): Promise<"updated" | "conflict" | "not_found">;
+  transition(recording: Recording, status: RecordingStatus, bootId?: string, startedStopAt?: string, correctedStopAt?: string): Promise<"updated" | "conflict" | "not_found">;
 }
 
 export async function createPrivateTransitionClient(socketPath: string): Promise<ReconcileDependencies["transition"]> {
-  return async (recording, status, bootId, startedStopAt) => new Promise((resolve, reject) => {
-    const body = JSON.stringify({ expected_status: recording.status, expected_version: recording.version, status, ...(bootId === undefined ? {} : { last_started_boot_id: bootId }), ...(startedStopAt === undefined ? {} : { last_started_stop_at: startedStopAt }) });
+  return async (recording, status, bootId, startedStopAt, correctedStopAt) => new Promise((resolve, reject) => {
+    const body = JSON.stringify({ expected_status: recording.status, expected_version: recording.version, status, ...(bootId === undefined ? {} : { last_started_boot_id: bootId }), ...(startedStopAt === undefined ? {} : { last_started_stop_at: startedStopAt }), ...(correctedStopAt === undefined ? {} : { corrected_stop_at: correctedStopAt }) });
     const req = request({ socketPath, path: `/internal/recordings/${encodeURIComponent(recording.id)}/transition`, method: "POST", headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) } }, (response) => {
       response.resume();
       response.once("end", () => {
@@ -50,8 +50,8 @@ async function hasOutput(recording: Recording): Promise<boolean> {
   }
 }
 
-async function complete(recording: Recording, deps: ReconcileDependencies, summary: ReconcileSummary): Promise<void> {
-  const outcome = await deps.transition(recording, (await hasOutput(recording)) ? "recorded" : "failed");
+async function complete(recording: Recording, deps: ReconcileDependencies, summary: ReconcileSummary, correctedStopAt?: string): Promise<void> {
+  const outcome = await deps.transition(recording, (await hasOutput(recording)) ? "recorded" : "failed", undefined, undefined, correctedStopAt);
   if (outcome === "updated") summary.transitioned += 1;
 }
 
@@ -137,7 +137,11 @@ export async function reconcileOnce(now: Date, bootId: string, deps: ReconcileDe
       const outcome = await deps.transition(recording, "recording", bootId, recording.stopAt);
       if (outcome === "updated") summary.transitioned += 1;
     } else {
-      await complete(recording, deps, summary);
+      // The unit exited on its own strictly before the scheduled stop_at, on
+      // the same boot that started it: the live stream ended early. Correct
+      // stop_at to now so the recording's window reflects when it actually
+      // ended rather than its original schedule.
+      await complete(recording, deps, summary, now.toISOString());
     }
   }
   return summary;

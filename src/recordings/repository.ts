@@ -76,6 +76,7 @@ export interface StatusCompareAndSet {
   status: RecordingStatus;
   lastStartedBootId?: string | null;
   lastStartedStopAt?: UtcInstant | null;
+  stopAt?: UtcInstant;
   now?: UtcInstant;
 }
 
@@ -278,7 +279,8 @@ export class RecordingRepository {
       throw new TypeError(`Invalid recording status transition: ${input.expectedStatus} -> ${input.status}`);
     }
     return this.database.transaction((): MutationResult<Recording> => {
-      if (this.getById(input.id) === undefined) return { outcome: "not_found" };
+      const existing = this.getById(input.id);
+      if (existing === undefined) return { outcome: "not_found" };
       const values: Array<string | number | null> = [input.status];
       let launchClauses = "";
       if (input.lastStartedBootId !== undefined) {
@@ -288,6 +290,15 @@ export class RecordingRepository {
       if (input.lastStartedStopAt !== undefined) {
         launchClauses += ", last_started_stop_at = ?";
         values.push(input.lastStartedStopAt === null ? null : timestamp(input.lastStartedStopAt, "lastStartedStopAt"));
+      }
+      if (input.stopAt !== undefined) {
+        // Correcting stop_at to an early-end time. Defensively clamp so it can
+        // never land at or before start_at (clock skew), which would violate
+        // the CHECK (start_at < stop_at) constraint.
+        const startMs = toUnixMilliseconds(existing.startAt, "stored startAt");
+        const stopMs = Math.max(timestamp(input.stopAt, "stopAt"), startMs + 1);
+        launchClauses += ", stop_at = ?";
+        values.push(stopMs);
       }
       values.push(timestamp(input.now, "now"), input.id, input.expectedStatus, input.expectedVersion);
       const result = this.database.prepare(`UPDATE recordings SET status = ?${launchClauses}, updated_at = ?, version = version + 1 WHERE id = ? AND status = ? AND version = ?`)

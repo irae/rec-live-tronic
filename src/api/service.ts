@@ -701,12 +701,13 @@ export class RecorderService {
     return { remuxed, skipped, failed };
   }
 
-  transition(input: { id: string; expected_status: unknown; expected_version: unknown; status: unknown; last_started_boot_id?: unknown; last_started_stop_at?: unknown }): ReturnType<typeof mapRecording> {
+  transition(input: { id: string; expected_status: unknown; expected_version: unknown; status: unknown; last_started_boot_id?: unknown; last_started_stop_at?: unknown; corrected_stop_at?: unknown }): ReturnType<typeof mapRecording> {
     if (!Number.isSafeInteger(input.expected_version) || (input.expected_version as number) < 0) throw new AppError("VALIDATION_ERROR", 400, "expected_version is invalid");
     const lastStartedBootId = input.last_started_boot_id === undefined ? undefined : text(input.last_started_boot_id, "last_started_boot_id", 200);
     const lastStartedStopAt = input.last_started_stop_at === undefined ? undefined : instant(input.last_started_stop_at, "last_started_stop_at");
+    const correctedStopAt = input.corrected_stop_at === undefined ? undefined : instant(input.corrected_stop_at, "corrected_stop_at");
     try {
-      const result = this.recordings.compareAndSetStatus({ id: input.id, expectedStatus: requireStatus(input.expected_status), expectedVersion: input.expected_version as number, status: requireStatus(input.status), ...(lastStartedBootId === undefined ? {} : { lastStartedBootId }), ...(lastStartedStopAt === undefined ? {} : { lastStartedStopAt }) });
+      const result = this.recordings.compareAndSetStatus({ id: input.id, expectedStatus: requireStatus(input.expected_status), expectedVersion: input.expected_version as number, status: requireStatus(input.status), ...(lastStartedBootId === undefined ? {} : { lastStartedBootId }), ...(lastStartedStopAt === undefined ? {} : { lastStartedStopAt }), ...(correctedStopAt === undefined ? {} : { stopAt: correctedStopAt }) });
       if (result.outcome !== "updated") throw new AppError(result.outcome === "not_found" ? "NOT_FOUND" : "CONFLICT", result.outcome === "not_found" ? 404 : 409, "Recording transition did not apply");
       if (result.value.status === "recorded") {
         void this.remuxRecording(input.id);

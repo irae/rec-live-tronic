@@ -106,7 +106,12 @@ t.test("converges cancelled, missed, early-exit, and reboot recovery state", asy
   await tick("2030-01-03T00:01:00Z");
   systemd.live.delete(`${early.id}.service`);
   await tick("2030-01-03T00:02:00Z");
-  t.equal(recordings.getById(early.id)?.status, "failed");
+  const earlyRow = recordings.getById(early.id);
+  t.equal(earlyRow?.status, "failed");
+  // The stream ended early (unit gone before the scheduled 00:10 stop), so
+  // stop_at is corrected to the reconcile tick time (00:02) rather than the
+  // original schedule.
+  t.equal(earlyRow?.stopAt, "2030-01-03T00:02:00.000Z", "stop_at reflects the early-stop time, not the schedule");
 
   const cancelled = await createRecording("2030-01-03T01:00:00Z", "2030-01-03T01:10:00Z");
   await tick("2030-01-03T01:01:00Z");
