@@ -1620,7 +1620,7 @@ t.test("keep promotes selected pieces to recorded recordings with cut_from_id se
   t.equal(existsSync(join(root, "recordings", id)), false);
 });
 
-t.test("keep defaults derived start_at/stop_at to the source's own dates, editable per piece", async (t) => {
+t.test("keep defaults derived start_at/stop_at to real clock times from the source's start plus trim offsets, editable per piece", async (t) => {
   const address = running.publicServer.address();
   if (!address || typeof address === "string") return t.fail("no public listener");
   const base = `http://127.0.0.1:${address.port}`;
@@ -1632,10 +1632,13 @@ t.test("keep defaults derived start_at/stop_at to the source's own dates, editab
     body: JSON.stringify({}),
   });
   const body = await response.json() as { recordings: { startAt: string; stopAt: string }[] };
-  // A cut is conceptually "the same event" as its source, so it defaults to
-  // the source's own dates verbatim -- not an offset-computed sub-window.
-  t.equal(body.recordings[0]!.startAt, "2099-01-01T00:00:00.000Z");
-  t.equal(body.recordings[0]!.stopAt, "2099-01-01T01:00:00.000Z");
+  // A cut is the same event as its source (same URL/title/etc by default),
+  // but its own calendar window is the source's start plus this piece's trim
+  // offsets -- not the source's full start/stop -- so Duration reflects the
+  // piece's real trimmed length (the fixture source starts at 00:00:00Z; a
+  // 5:00-10:00 trim is offsets 300s-600s from that).
+  t.equal(body.recordings[0]!.startAt, "2099-01-01T00:05:00.000Z");
+  t.equal(body.recordings[0]!.stopAt, "2099-01-01T00:10:00.000Z");
 
   const editId2 = await createFinishedRecording(base, "keep wall-clock override source");
   const draft2 = await createTrimDraft(base, editId2, "5:00", "10:00");

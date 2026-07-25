@@ -352,11 +352,19 @@ export class RecorderService {
       const venue = overrideField(override?.venue, `overrides[${index}].venue`) ?? source.venue;
       const event = overrideField(override?.event, `overrides[${index}].event`) ?? source.event;
       const stage = overrideField(override?.stage, `overrides[${index}].stage`) ?? source.stage;
-      // Cut pieces default to the same dates as the source recording (a cut
-      // is conceptually "the same event," not a different sub-window) --
-      // editable per piece since a split can plausibly want distinct dates.
-      const startAt = override?.start_at !== undefined ? instant(override.start_at, `overrides[${index}].start_at`) : source.startAt;
-      const stopAt = override?.stop_at !== undefined ? instant(override.stop_at, `overrides[${index}].stop_at`) : source.stopAt;
+      // Cut pieces default to real clock times derived from the source's
+      // start plus this piece's trim offsets -- not the source's full
+      // start/stop window -- so a piece's Duration reflects its own trimmed
+      // length rather than the entire source recording's. (Metadata like
+      // title/artist/venue/event/stage still defaults to the source's own,
+      // since a cut is the same event -- only the calendar window differs.)
+      // Editable per piece since a split can plausibly want distinct dates.
+      const segment = parsed.segments[index]!;
+      const sourceStartMs = toUnixMilliseconds(source.startAt, "startAt");
+      const defaultStartAt = toRfc3339(Math.round(sourceStartMs + segment.start * 1000));
+      const defaultStopAt = toRfc3339(Math.round(sourceStartMs + segment.end * 1000));
+      const startAt = override?.start_at !== undefined ? instant(override.start_at, `overrides[${index}].start_at`) : defaultStartAt;
+      const stopAt = override?.stop_at !== undefined ? instant(override.stop_at, `overrides[${index}].stop_at`) : defaultStopAt;
       if (toUnixMilliseconds(startAt, `overrides[${index}].start_at`) >= toUnixMilliseconds(stopAt, `overrides[${index}].stop_at`)) {
         throw new AppError("VALIDATION_ERROR", 400, `overrides[${index}].start_at must be before stop_at`);
       }
