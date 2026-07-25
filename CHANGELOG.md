@@ -14,7 +14,12 @@ SQLite (WAL, `better-sqlite3`), curl-first. Recordings run as detached
 restarts; the reconciler is the authoritative scheduled stopper. Schedule,
 list, live-edit `stop_at`, cancel, and cookie upload via curl. Containerized
 `linux/amd64` release build, auditable `scripts/install-root.sh`, shared
-`rec-media` group access. Live-acceptance-tested on `irae-sheeta`.
+`rec-media` group access. Live-acceptance-tested on `irae-sheeta`. Capture
+uses streamlink `--stdout` + systemd `StandardOutput=append:` because
+streamlink's own `--output`/`--force` cannot do reboot-safe appends. The
+originally sketched `muxed` status and `final_path` column never shipped —
+finished recordings stay `recorded`, and the later MP4 remux (Phase 6)
+re-points `ts_path` in place instead.
 
 ## Beta 1 — VLC streaming + package split (`0.1.0`)
 
@@ -28,7 +33,11 @@ Mobile-first Vue 3 + Vite SPA (`web-client/`) served by the existing Express
 API: schedule (create/edit/cancel/start-now/stop-early), archive, and
 per-recording detail with `mpegts.js` playback, copy-stream-URL, and iOS/Mac
 "Open in VLC" links. Optional `stage` label derived at creation. Hard delete
-(`DELETE /recordings/:id/file`) removing file + row.
+(`DELETE /recordings/:id/file`) removing file + row. Known mpegts.js
+limitation, later mooted by the Phase 6 MP4 transition: it cannot be told an
+accurate up-front duration for MPEG-TS, so with `lazyLoad` on (required for
+multi-GB files), duration/seek-to-end only became accurate progressively as
+the file demuxed.
 
 ## Beta 3 — trash / retention (`0.3.0`)
 

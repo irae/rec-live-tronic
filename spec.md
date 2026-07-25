@@ -1,9 +1,12 @@
 # YouTube Live Recorder — Architecture Spec
 
-Architecture specification, describing the current decided state. Phases 0-2
-are implemented and deployed; this document reflects that reality, not the
-history of how it was reached (see git log for that). Extend it before
-implementing anything in Phase 3 or later.
+Architecture specification, describing the current decided state through
+Phase 6 / v0.6.0 (the MP4 transition — fully planned and being implemented
+now; this document deliberately describes that end-state as the
+architecture). It reflects decided state, not the history of how it was
+reached — see `CHANGELOG.md` and git log for that. Extend it before
+implementing anything in Phase 7 or later; phase numbering follows
+`plan.md`.
 
 ## Core durable traits
 
@@ -50,19 +53,19 @@ list is the pointer, not the depth.
 - **SQLite (WAL mode, accessed with `better-sqlite3`)** — recordings, cookies, candidates. WAL so the API writes while the reconciler reads without blocking.
 - **HTTP API (Node + Express)** — the only writer to SQLite in normal operation. curl-first.
 - **Reconciler daemon** — thin loop (run as a systemd timer/service, tick every 10s). Holds no in-memory state worth losing. Diffs SQLite ⇄ live `rec-*` systemd units and acts.
-- **streamlink** — the recorder binary. Writes `.ts` (append-safe; killable mid-write and still playable).
-- **ffmpeg -c copy** — remux/convert `.ts` → final container. *(Phase 4, deprioritized)*
-- **Web UI** — a Vue 3 SPA (Vite build, `vue-router` client-side routing at `/`, `/schedule`, `/watch/:id` — deliberately not `/recordings/:id`, which the real JSON API already owns), served as static files by the same Express API (`express.static` plus an SPA-fallback route so deep-linking/refreshing a client route works). Covers schedule (create/edit/cancel/start-now/stop-early), archive (finished recordings), and per-recording detail (playback, copy-URL, delete). Playback of finished recordings uses `mpegts.js` (client-side MSE-based transmuxing): no current major browser (Chrome, Edge, Safari, Firefox) natively plays a standalone `.ts` file via a plain `<video src>` (see `docs/browser-playback-research.md`). *(Phase 2, done.)*
+- **streamlink** — the recorder binary. Writes `.ts` (append-safe; killable mid-write and still playable). The `.ts` is the capture format only, not the serving format.
+- **ffmpeg / ffprobe** — in-process one-shot `execFile` jobs (argv only, never a shell, bounded timeouts): the post-capture `-c copy` remux of each finished `.ts` into faststart MP4, ffprobe verification of that remux, and the Cut workflow's keyframe-snapped segment extraction (also emitted directly as MP4).
+- **Web UI** — a Vue 3 SPA (Vite build, `vue-router` client-side routing at `/`, `/schedule`, `/watch/:id`, `/trash` — deliberately not `/recordings/:id`, which the real JSON API already owns), served as static files by the same Express API (`express.static` plus an SPA-fallback route so deep-linking/refreshing a client route works). Covers schedule (create/edit/cancel/start-now/stop-early), archive, trash, and per-recording detail (playback, Cut console, metadata editing, download, copy-URL, VLC links, trash). Playback of finished recordings is a plain `<video src>` against the served MP4 — no client-side transmuxing library (raw `.ts` is not natively playable in any current browser, see `docs/browser-playback-research.md` and `docs/serving-format-research.md`; the MP4 remux is what makes the plain element work).
 
-## Trusted intranet access (next deployment block)
+## Trusted intranet access
 
-The planned deployment is an intranet service on a host whose operators already
-have SSH access. Once this block is implemented, `rec-media` will be the shared
-operational group: `irae` and other explicitly assigned media users will be able
-to read and write recordings, logs, cookies, and other operational artifacts
-through the filesystem. SQLite control/state
-files and transient systemd internals remain outside that shared tree. This is
-deployment policy for the trusted host, not a public-service security boundary.
+The deployment is an intranet service on a host whose operators already have
+SSH access. `rec-media` is the shared operational group: `irae` and other
+explicitly assigned media users read and write recordings, logs, cookies, and
+other operational artifacts directly through the filesystem (group-write via
+`UMask=0007`). SQLite control/state files and transient systemd internals
+remain outside that shared tree. This is deployment policy for the trusted
+host, not a public-service security boundary.
 
 ## How recording works (the core mechanism)
 
@@ -88,26 +91,72 @@ Reconciler tick responsibilities:
 4. `recording` & unit gone early (crash/stream ended) → mark `recorded` (file exists) or `failed`.
 5. `cancelled` with a live unit → `systemctl stop`, mark `cancelled`.
 6. Reboot recovery (rule 1 covers it) / `missed` when window fully elapsed with no file or launch evidence.
-7. *(Phase 4)* `recorded` & not yet muxed → enqueue remux.
+
+The reconciler's job ends at `recorded`. The MP4 remux is API-side: when a
+transition lands `recorded`, the API fires an in-process one-shot
+`ffmpeg -c copy -movflags +faststart` remux of the `.ts` into `<id>.mp4`,
+verifies the output with ffprobe (duration match, both streams present), then
+re-points `ts_path` at the `.mp4` and removes the `.ts`. A failed or
+unverified remux keeps the `.ts` in place and served (extension-aware file
+route), with the real error logged — remux failure never breaks serving.
 
 ## Data model (fields, not schema)
 
-- **recordings**: `id`, `url`, `title`, `stage?` (optional label, derived at creation — see plan.md Phase 2), `cookie_id?`, `quality` (default `best`), `start_at`, `stop_at`, `status`, `unit_name`, `ts_path`, `final_path?`, `created_at`, `updated_at`.
-  - status: `scheduled → recording → recorded → muxed` plus `cancelled | failed | missed`.
+- **recordings**: `id`, `url`, `title`, `stage?`/`artist?`/`venue?`/`event?`
+  (optional metadata labels; title composed from them server-side at creation
+  when no explicit title is given), `cookie_id?`, `quality` (default `best`),
+  `start_at`, `stop_at`, `status`, `unit_name`, `ts_path`, `trashed_at?`
+  (non-null = in trash, orthogonal to status), `cut_from_id?` (lineage to the
+  cut source), `created_at`, `updated_at`.
+  - status: `scheduled → recording → recorded` plus `cancelled | failed |
+    missed`. `recorded` is the only terminal media-bearing status.
+  - `ts_path` holds the served media file — the `.mp4` after the post-capture
+    remux; the column name is kept from the capture format for continuity.
 - **cookies**: `id`, `name`, `path`, `updated_at`. Multiple named cookie files → different accounts for parallel recordings.
-- **candidates**: `id`, `source`, `title`, `url`, `suggested_start`, `suggested_stop`, `imported_at`, `promoted_recording_id?`. A candidate is an un-scheduled suggestion; promoting one creates a `recordings` row.
+- **cut_drafts**: one `previewing` draft per source at most — mode
+  (`trim`/`split`), params, working dir, piece count, status. Tracks the Cut
+  workflow's not-yet-promoted previews so orphaned working folders are swept
+  by query.
+- **candidates** *(not yet built — Phase 8)*: `id`, `source`, `title`, `url`, `suggested_start`, `suggested_stop`, `imported_at`, `promoted_recording_id?`. A candidate is an un-scheduled suggestion; promoting one creates a `recordings` row.
 
 ## API surface (curl-first)
 
-Recordings: `POST /recordings` · `GET /recordings` (filter by status) · `GET /recordings/:id` · `PATCH /recordings/:id` (retitle, reschedule, **extend `stop_at` live**) · `DELETE /recordings/:id` (cancel; stops if running).
+Recordings: `POST /recordings` · `GET /recordings` (filters: `?status=`,
+`?trashed=true`, `?cut_from=<id>`; the list response also carries the disk
+figures and an `is_recording` flag the header polls) · `GET /recordings/:id` ·
+`PATCH /recordings/:id` (retitle/reschedule while scheduled, **extend
+`stop_at` live**, metadata-only edits once `recorded`) ·
+`DELETE /recordings/:id` (cancel; stops if running) · best-effort read-only
+helpers `GET /recordings/oembed?url=` (title/channel prefill) and
+`GET /recordings/formats?url=` (live-stream quality probe).
+
+Trash: `DELETE /recordings/:id/file` moves a finished recording **to trash**
+(sets `trashed_at`; file and row survive) · `POST /recordings/:id/restore` ·
+`DELETE /recordings/:id/trash` (permanent purge — unlink file(s) + delete the
+row; gated to trashed rows; retryable on unlink failure).
+
+Cut: `POST /recordings/:id/cut` (create/regenerate the source's single active
+draft) · `GET /recordings/:id/cut/:draftId/pieces/:index/file` (range-served
+preview piece) · `POST /recordings/:id/cut/:draftId/keep` (promote kept
+pieces) · `DELETE /recordings/:id/cut/:draftId` (abandon).
 
 Cookies: `POST /cookies` (multipart upload, `name` + file) · `GET /cookies` · `DELETE /cookies/:id`.
 
-Candidates *(not yet built, deferred — see plan.md's lowest-priority section)*: `POST /candidates` (bulk import a broadcast schedule) · `GET /candidates` · `POST /candidates/:id/schedule` (promote → recording, optional overrides) · `DELETE /candidates/:id`.
+Candidates *(not yet built — Phase 8)*: `POST /candidates` (bulk import a broadcast schedule) · `GET /candidates` · `POST /candidates/:id/schedule` (promote → recording, optional overrides) · `DELETE /candidates/:id`.
 
-Files: `GET /recordings/:id/file` — a static Express route that streams a **finished** (`recorded`/`muxed`) file with HTTP range support, giving a stable per-file network URL VLC can open and the web client's `mpegts.js` player range-fetch against. Serving a still-recording/growing file is a non-goal. `DELETE /recordings/:id/file` performs a full purge (unlinks the file, tolerating already-missing, and deletes the SQLite row — despite the `/file` in the path, it removes the whole record); gated to `recorded` status only (`409` otherwise — a scheduled/recording row goes through the existing soft-cancel route instead), and a `500` (unlink failure other than already-missing) leaves the row intact so the delete is safely retryable.
+Files: `GET /recordings/:id/file` (and the friendly-filename variant
+`GET /recordings/:id/file/:filename`) — streams a **finished** (`recorded`)
+file with HTTP range support via `sendFile()`, a stable per-file URL both the
+browser `<video>` element and VLC open directly; `?download=1` adds a
+`Content-Disposition: attachment` with a sanitized `<title>` filename.
+Content-Type and filename extension are derived from the actual file
+(`.mp4` → `video/mp4`; a not-yet/failed-remux `.ts` → `video/mp2t`), so
+serving never depends on remux success. Serving a still-recording/growing
+file is a non-goal. `POST /recordings/backfill-mp4` — idempotent maintenance
+route that remuxes any remaining `.ts`-backed rows (and, with
+`{"delete_ts":true}`, removes verified leftover `.ts` siblings).
 
-Ops: `GET /health`. *(`GET /recordings/:id/log`, to tail streamlink output over HTTP, is not yet built — the per-recording log file is directly readable over SSH today, see AGENTS.md.)*
+Ops: `GET /health`. *(`GET /recordings/:id/log`, to tail streamlink output over HTTP, is deliberately not built — the per-recording log file is directly readable over SSH via the `rec-media` group, see AGENTS.md.)*
 
 ## Recorder invocation notes
 
@@ -117,28 +166,49 @@ Ops: `GET /health`. *(`GET /recordings/:id/log`, to tail streamlink output over 
 
 ## Build phases
 
-- **Phase 0 (done):** SQLite + Express API + reconciler + streamlink. Schedule/list/cancel recordings, extend/shorten `stop_at` live, and upload cookies via curl. Records `.ts` reliably. No UI, no transcode.
-- **Phase 1 (done):** VLC-openable static file route (`GET /recordings/:id/file`, finished files only) + split the release into `web`/`reconciler`/`deps` packages for independent, faster deploys.
-- **Phase 2 (done):** the web client (Vue 3 SPA, `mpegts.js` playback) plus the hard delete route (`DELETE /recordings/:id/file`).
-- **Phase 3:** file operations — non-destructive derived-recording trim/split over already-finished files (independent rows, deleted the same way as any other recording).
-- **Phase 4 (deprioritized):** transcode/remux to a final container (`mkv` vs `mp4` — open) + download.
-- **Deferred, unordered** (see plan.md's lowest-priority section for the full list): candidates (bulk schedule import → promote), log tailing over HTTP, retention/cleanup policy, client-captured thumbnails, Firefox playback.
+Numbering matches `plan.md`; completed phases are summarized per-milestone in
+`CHANGELOG.md` (Beta N = Phase N = version `0.N.0`).
+
+- **Phase 0 (done):** core recorder — SQLite + Express API + reconciler +
+  streamlink, curl-first. Reliable `.ts` capture.
+- **Phase 1 (done):** VLC-openable range-serving file route + the
+  `web`/`reconciler`/`deps` release package split.
+- **Phase 2 (done):** the web client (Vue 3 SPA) plus hard delete.
+- **Phase 3 (done):** trash/retention — reversible delete, restore, permanent
+  delete, disk-space readout, 30-day auto-purge.
+- **Phase 4, 4a, 4b (done):** misc actions (Now mode, oEmbed prefill,
+  downloads, quality picker), finished-recording metadata editing, and the
+  post-ship UX batch.
+- **Phase 5 (done):** the Cut workflow — preview-then-promote Trim/Split with
+  lineage.
+- **Phase 6 (v0.6.0, this spec's state):** the MP4 transition — post-capture
+  faststart MP4 remux, extension-aware serving, plain-`<video>` playback,
+  `mpegts.js` removed, one-time backfill of pre-existing recordings.
+- **Phase 7:** audio-only capture and playback behind a global toggle.
+- **Phase 8:** candidates (bulk schedule import → promote) — research first.
+- **Deferred, unordered** (see plan.md's lowest-priority section): demux
+  (undesigned), client-captured thumbnails, reboot-recovery acceptance test.
 
 ## Open decisions — resolve before the relevant phase (do NOT invent)
 
-- ⚠ **Final container (Phase 4):** `mkv` vs `mp4` (remux `-c copy`; if audio/video codecs aren't mp4-safe, mkv is the safe default).
-- ⚠ **Transcode trigger (Phase 4):** reconciler-driven vs. a systemd `.path` unit watching the output dir.
-- ⚠ **Candidate import format (deferred):** JSON array vs. CSV vs. ICS. Default assumption: JSON for MVP.
-- ⚠ **Retention (deferred):** manual delete only, or age/size-based cleanup.
+- ⚠ **Candidate import format (Phase 8):** JSON array vs. CSV vs. ICS. Default assumption: JSON for MVP.
+
+*Resolved: final serving container is **MP4** (H.264+AAC stream copy,
+`-movflags +faststart`) — hands-on verified in
+`docs/serving-format-research.md`; MKV ruled out (no native `<video>`
+support).*
+
+*Resolved: the remux trigger is an **in-process one-shot `execFile` ffmpeg
+job** fired by the API when a recording lands `recorded` (plus the idempotent
+backfill route) — not reconciler-driven, no systemd `.path` unit.*
+
+*Resolved: retention is manual delete + trash with a 30-day auto-purge (Phase
+3); no age/size-based cleanup of live recordings.*
 
 *Resolved: file sharing / network URL is a static Express file route (`GET /recordings/:id/file`), finished files only. No Jellyfin/nginx/Samba.*
 
-*Resolved: mpegts.js cannot be given an accurate seek-to-end duration for MPEG-TS — its `duration` MediaDataSource field (`overridedDuration`) is implemented only by its FLV demuxer, and its internal `_updateMediaSourceDuration` path only fires for a Safari `audio/mpeg` edge case; it exposes no public access to the underlying `MediaSource` object either. `lazyLoad: true` stays on (required for scalability against multi-GB recordings); duration/seek-to-end becomes accurate progressively as more of the file is demuxed, not forced up front.*
+## Non-goals
 
-## Non-goals (Phase 0 MVP scope)
-
-Transcoding, retention automation, and any UI were deliberately out of
-scope for Phase 0 — reliability of `.ts` capture came first. UI (Phase 2) and
-delete (Phase 2) are since built; transcoding and retention remain
-unbuilt (Phase 4 / deferred, above). Authentication is a permanent non-goal:
-this app will never have an auth layer (see "Goal & principles").
+Serving or playing a still-recording/growing file. Any age/size-based cleanup
+of non-trashed recordings. Authentication is a permanent non-goal: this app
+will never have an auth layer (see "Goal & principles").
