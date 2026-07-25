@@ -44,7 +44,7 @@ t.test("pickKeyframeAtOrBefore", (t) => {
   t.end();
 });
 
-t.skip("extractSegment writes a real, non-empty file to a .tmp-suffixed output path", async (t) => {
+t.test("extractSegment writes a real, non-empty file to a .tmp-suffixed output path", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "rec-live-tronic-cut-extract-"));
   const sourcePath = join(root, "source.ts");
   const outputPath = join(root, "piece-0.ts.tmp");
