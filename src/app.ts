@@ -3,7 +3,7 @@ import express from "express";
 import { createRequire } from "node:module";
 import { dirname, extname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { statfs } from "node:fs/promises";
+import { stat, statfs } from "node:fs/promises";
 import type { RecorderService } from "./api/service.js";
 import type { Config } from "./config.js";
 
@@ -113,8 +113,28 @@ function addPublicRoutes(app: express.Express, recorder: RecorderService, config
         : cutFrom !== undefined
           ? recorder.listRecordings(undefined, { cutFromId: cutFrom })
           : recorder.listRecordings(request.query.status);
+
+      // For trashed recordings, add file size information
+      let resultRecordings: unknown[] = recordings;
+      if (trashed === true) {
+        resultRecordings = await Promise.all(
+          recordings.map(async (rec) => {
+            let fileSizeBytes: number | null = null;
+            try {
+              const fileStats = await stat((rec as { tsPath?: string }).tsPath || "");
+              fileSizeBytes = fileStats.size;
+            } catch (error) {
+              if (!(error && typeof error === "object" && "code" in error && error.code === "ENOENT")) {
+                console.error(`Failed to stat recording file for ${(rec as { id?: string }).id}:`, error);
+              }
+            }
+            return { ...rec, fileSizeBytes };
+          }),
+        );
+      }
+
       const result: { recordings: unknown; is_recording: boolean; disk?: { actual_bytes: number; projected_bytes: number } } = {
-        recordings,
+        recordings: resultRecordings,
         is_recording: recorder.listRecordings("recording").length > 0,
       };
       if (config) {

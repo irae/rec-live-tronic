@@ -28,6 +28,8 @@
 
         <div class="crate__facts">
           <span class="fact">Recorded <b>{{ formatDate(rec.startAt) }}</b></span>
+          <span class="fact">Duration <b>{{ computeDuration(rec.startAt, rec.stopAt) }}</b></span>
+          <span class="fact">Size <b>{{ rec.fileSizeBytes != null ? formatBytes(rec.fileSizeBytes) : "—" }}</b></span>
           <span class="fact">Trashed <b>{{ relativeTime(rec.trashedAt) }}</b></span>
         </div>
 
@@ -188,6 +190,26 @@ function daysUntil(dateStr: string): string {
   const diffDays = Math.ceil(diffMs / 86_400_000);
   if (diffDays <= 0) return "< 1 day";
   return `${diffDays}d`;
+}
+
+function computeDuration(startAt: string, stopAt: string): string {
+  const start = new Date(startAt).getTime();
+  const stop = new Date(stopAt).getTime();
+  const diffMs = stop - start;
+  if (diffMs <= 0) return "—";
+
+  const diffSec = Math.floor(diffMs / 1000);
+  const hours = Math.floor(diffSec / 3600);
+  const minutes = Math.floor((diffSec % 3600) / 60);
+  const seconds = Math.floor(diffSec % 60);
+  return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatBytes(bytes: number): string {
+  const gb = bytes / 1_073_741_824;
+  if (gb >= 1) return `${gb.toFixed(1)} GB`;
+  const mb = bytes / 1_048_576;
+  return `${mb.toFixed(0)} MB`;
 }
 </script>
 

@@ -18,6 +18,7 @@ export interface Recording {
   version: number;
   createdAt: string;
   updatedAt: string;
+  fileSizeBytes?: number | null;
 }
 
 export interface CutPiece {
