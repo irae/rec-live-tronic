@@ -306,6 +306,249 @@ Preview-then-promote Trim/Split over finished recordings via keyframe-snapped
 `ffmpeg -c copy` extraction, with lineage (`cut_from_id`) and full per-piece
 metadata on Keep. See `CHANGELOG.md` — Beta 5.
 
+### Phase 6 — MP4 transition (drop mpegts.js)
+
+**Complexity: Medium.** Serve every finished recording as **MP4** (H.264+AAC
+stream copy, `-movflags +faststart`) instead of raw MPEG-TS, so in-browser
+playback becomes a plain `<video src>` on every platform and `mpegts.js` is
+removed entirely. Capture is untouched: streamlink still appends MPEG-TS to
+`<recordingsDir>/<id>.ts` (append-safe mid-write — that property stays load-
+bearing); the MP4 is produced by a post-capture remux. This phase absorbs and
+supersedes the old "Phase 8 — conversion, demux, format" sketch: its two open
+decisions are resolved below, its download item is already shipped (Phase 4's
+`?download=1`), its demux item is deferred (see "Lowest priority").
+
+**Hard safety rule structuring the whole phase: no `.ts` file is deleted from
+disk until the owner signs off the full manual verification.** Steps 1–9 ship
+code and the backfill with every `.ts` kept on disk as a safety net; only
+step 10, a separate later commit gated on that sign-off, deletes anything.
+
+**Decisions (all resolved here — implementation requires no judgment calls).**
+
+- **Container: MP4** (`-c copy -movflags +faststart`). Hands-on verified in
+  `docs/serving-format-research.md` (§2: real production `.ts` remuxed at
+  2300x realtime, identical codecs, `moov` correctly front-loaded; §4: MKV
+  ruled out — no native `<video>` support). Resolves the old ⚠ mkv-vs-mp4
+  open decision.
+- **Job mechanism: the in-process one-shot `execFile` ffmpeg job** Phase 5
+  built for cut extraction (`src/api/cut-extract.ts` pattern — argv only,
+  never a shell, bounded timeout). No reconciler involvement, no systemd
+  `.path` unit. Resolves the old ⚠ trigger-mechanism open decision.
+- **`ts_path` keeps its column name** and simply holds an `.mp4` path after
+  the transition. A rename would need a migration plus renaming the `tsPath`
+  identifier through repository/service/client/tests for zero behavioral
+  gain — contrary to the simplicity guidelines. The mismatch gets a one-line
+  note in `spec.md`'s data-model section (step 11).
+- **Playback gating still holds: this app never plays an in-progress
+  recording.** Re-confirmed in `docs/serving-format-research.md` §1 —
+  `RecordingDetail.vue` mounts its player only under
+  `v-if="recording.status === 'recorded'"`, and `CutConsole.vue` previews
+  only extracted pieces. Dropping `mpegts.js` loses nothing.
+- **Cut pieces are extracted natively as `.mp4`** — no separate remux step
+  ever exists for Cut/Keep output. Sound because the extraction is the same
+  `-c copy` stream copy; an explicit `-f mp4` keeps the `.tmp`-suffixed
+  working name working (the exact reasoning the current `-f mpegts` comment
+  in `src/api/cut-extract.ts` documents); `+faststart` needs seekable output,
+  which a regular file is; and the ffprobe keyframe snap reads any input
+  container. Cut sources may be `.ts` (not yet backfilled) or `.mp4`
+  (backfilled/native) — ffmpeg reads both, no branching needed.
+- **Backfill mechanism: a curl-triggered API route**
+  (`POST /recordings/backfill-mp4`), not a `scripts/` script and not an
+  `install-root.sh`/migration step. Decisive reason: the API is the sole
+  SQLite writer (operational invariant) — a standalone script updating
+  `ts_path` would either violate that or require stopping the service, and it
+  would also need root/service-account access to the private data dir. A
+  route matches the repo's curl-first style, runs with the service's own
+  config and permissions, is idempotent (re-run until clean), and stays
+  useful as recovery tooling. The owner runs one curl command (step 9).
+- **Final `.ts` disposal (step 10): delete outright, no quarantine.** The
+  remux is a stream copy — the elementary streams are bit-identical by
+  construction — and every output is verified with ffprobe (duration match +
+  both streams present) *before* the source `.ts` is touched. A quarantine
+  directory would add a sweep, states, and disk pressure to guard against a
+  failure mode the verification already catches deterministically. The
+  failure path IS the quarantine: if remux or verification fails, the `.ts`
+  is kept, the row keeps serving it, and the error is `console.error`ed.
+
+**Serving/back-compat model (permanent, not transitional).**
+`serveRecordingFile` in `src/app.ts` becomes extension-aware: Content-Type and
+the Content-Disposition filename extension derive from `extname(tsPath)`
+(`.mp4` → `video/mp4`, anything else → `video/mp2t` with `.ts`). This is kept
+forever, not just during migration: a row whose live remux failed stays a
+served, VLC-playable `.ts`, so a remux failure never breaks serving.
+
+**Implementation sequence (commit after each numbered step).**
+
+1. **ffmpeg back into the build image; un-skip the real-ffmpeg test.**
+   Bandwidth is no longer a constraint (owner-confirmed; reverses commit
+   `1e91b94`'s removal). In `Dockerfile.build` line 4, add `ffmpeg` to the
+   `apt-get install -y --no-install-recommends` list of the `build` stage. In
+   `test/unit/cut-extract.test.ts` line 47, change `t.skip(` to `t.test(`
+   (the test resolves ffmpeg via `REC_LIVE_TEST_FFMPEG_BIN ?? "ffmpeg"` on
+   PATH). Done when: `npm test` passes locally and `scripts/build-release.sh`
+   completes. Commit.
+2. **Extension-aware serving (ships while every file is still `.ts`).** In
+   `src/app.ts`: give `sanitizeFilename` (line 45) an `extension` parameter
+   instead of the hardcoded `".ts"` suffix; in `serveRecordingFile`, derive
+   the extension from `extname(tsPath)`, set `Content-Type` to `video/mp4`
+   for `.mp4` else `video/mp2t`, and use `${id}<extension>` as the fallback
+   filename; in the cut-piece route (`GET
+   /recordings/:id/cut/:draftId/pieces/:index/file`), derive Content-Type
+   from the piece path's extension the same way. Done when: `npm test` green
+   and a `.ts` recording serves with identical headers to today. Commit.
+3. **Remux capability.** New file `src/api/remux.ts` exporting:
+   - `buildRemuxArgv(sourcePath: string, outputPath: string): string[]` —
+     the argv `-y -i <sourcePath> -c copy -movflags +faststart -f mp4
+     <outputPath>`.
+   - `remuxToMp4(ffmpegBin: string, ffprobeBin: string, sourcePath: string,
+     outputPath: string): Promise<void>` — runs ffmpeg to
+     `${outputPath}.tmp`, verifies the tmp with ffprobe (container duration
+     within 1 second of the source's, exactly one video and one audio
+     stream), then atomically `rename()`s to `outputPath`. Any failure
+     throws, best-effort removes the `.tmp`, and leaves no final `.mp4`.
+     Timeout: scale with expected size — use a generous fixed bound (10
+     minutes) since multi-GB remuxes are I/O-bound seconds-to-minutes, and a
+     hung ffmpeg must not leak.
+   Add `RecordingRepository.updateTsPath(id: string, tsPath: string)` to
+   `src/recordings/repository.ts` (plain UPDATE + `updated_at`; API remains
+   the sole writer). Unit tests in new `test/unit/remux.test.ts`, following
+   `test/unit/cut-extract.test.ts`'s init pattern (env-resolved real ffmpeg):
+
+   ```ts
+   t.test("buildRemuxArgv emits copy, faststart, explicit mp4 format, and the tmp-safe output path");
+   t.test("remuxToMp4 produces a verified mp4 from a real .ts and removes the .tmp");
+   t.test("remuxToMp4 rejects and leaves no output when verification fails");
+   ```
+   Commit.
+4. **Live remux for new recordings.** In `src/api/service.ts` add
+   `RecorderService.remuxRecording(id)`: no-op unless the row exists, status
+   is `recorded`, and `tsPath` ends with `.ts`; output path
+   `join(this.config.recordingsDir, `${id}.mp4`)`; on success call
+   `this.recordings.updateTsPath(id, <mp4 path>)`. It does **not** delete the
+   `.ts` (step 10 adds that). On any failure: `console.error` and return —
+   the row keeps serving its `.ts`. Hook it in `RecorderService.transition`
+   (currently `src/api/service.ts:631`): when a transition successfully lands
+   `status === "recorded"`, fire-and-forget `void this.remuxRecording(id)` —
+   the reconciler's CAS response must never wait on ffmpeg. Functional-test
+   support: extend the functional suite's ffprobe stub
+   (`test/functional/server.test.ts` line 43, currently `exit 1`) to print a
+   fixed duration when its argv contains `format=duration` and keep exiting 1
+   otherwise, so remux verification passes against the plain-text fixtures
+   while keyframe-snap behavior is unchanged; the ffmpeg stub already copies
+   input to output regardless of extension. Commit.
+5. **The backfill route.** `POST /recordings/backfill-mp4` in `src/app.ts` →
+   new `RecorderService.backfillMp4()`: iterate every `recorded` row
+   **including trashed ones** (trash serves downloads/players too) whose
+   `tsPath` ends `.ts`, run `remuxRecording` sequentially (never in
+   parallel — disk-bound), respond
+   `{ "remuxed": <n>, "skipped": <n>, "failed": ["<id>", …] }`. Idempotent:
+   a re-run only touches rows still on `.ts`. No body/params in this step
+   (step 10 adds `delete_ts`). Commit.
+6. **Cut pipeline emits `.mp4` pieces.** In `src/api/cut-extract.ts`, change
+   `buildExtractArgv` to output `-c copy -movflags +faststart -f mp4` (drop
+   `-f mpegts`; update the comment's reasoning — the `.tmp` argument is
+   unchanged). In `src/api/service.ts`, replace every `piece-${index}.ts`
+   with `piece-${index}.mp4` (the extraction loop ~lines 232–248,
+   `getCutPieceFile` line 284, the keep loop line 378) and the Keep
+   destination becomes `join(recordingsDir, `${newId}.mp4`)` with
+   `tsPath: destPath` as today. The Adjust stale-piece cleanup removes both
+   `piece-N.ts` and `piece-N.mp4` names (drafts spanning the deploy). A
+   pre-deploy in-flight draft simply regenerates on Adjust; drafts are
+   24h-swept, so no migration. Update the cut unit/functional tests'
+   expected filenames. Commit.
+7. **Purge unlinks both siblings.** In `purgeOne` (`src/api/service.ts`,
+   currently ~line 620): after unlinking `recording.tsPath`, also unlink the
+   sibling path with the other extension (`<recordingsDir>/<id>.ts` when
+   `tsPath` ends `.mp4`, and vice versa), tolerating ENOENT — so a
+   backfilled-then-purged row cannot orphan its safety-net `.ts`. Commit.
+8. **Frontend drops `mpegts.js`.**
+   - `web-client/src/views/RecordingDetail.vue`: remove the `mpegts` import,
+     `useMpegts`, `setupPlayer`/teardown and the player branch — one plain
+     `<video ref="videoEl" :src="streamUrl" controls>`.
+   - `web-client/src/components/CutConsole.vue`: same — drop the
+     `piecePlayers` map and lazyLoad workaround; plain
+     `<video :src="piece.file_url" controls>` per piece.
+   - `web-client/src/lib/file-url.ts` line 11: friendly-filename suffix
+     `.ts` → `.mp4`. (Cosmetic-only mismatch for a not-yet-backfilled row is
+     acceptable: the server's Content-Disposition carries the true name and
+     VLC sniffs content; the backfill runs at deploy time anyway.)
+   - Download labels "⬇ Download .ts" → "⬇ Download .mp4" in
+     `RecordingDetail.vue` (line 119) and `TrashView.vue` (line 44).
+   - Remove the `"mpegts.js"` dependency — note it lives in the **root**
+     `package.json` (line 26; `web-client/` has no own package.json) — and
+     run `npm install` to refresh `package-lock.json`.
+   Done when: `npm run build` passes and `grep -rn mpegts web-client/
+   package.json` returns nothing. Commit.
+9. **Deploy, backfill, verify — then PAUSE.** Deploy normally
+   (`scripts/install-sheeta.sh`). Owner runs the one-time backfill:
+
+   ```sh
+   curl -X POST http://irae-sheeta.tailc9708.ts.net:8787/recordings/backfill-mp4
+   ```
+
+   Re-run until `failed` is empty (idempotent). Then the owner works through
+   `agent-communications/testing-plan-mp4-transition.md` end to end, against
+   both a backfilled recording and a freshly-captured (natively-remuxed) one.
+   Every `.ts` is still on disk throughout. **Owner sign-off gate: step 10
+   does not begin until that checklist passes.**
+10. **Final `.ts` cleanup (post-sign-off only).**
+    - `remuxRecording` gains its deletion tail: after successful verify +
+      rename + `updateTsPath`, unlink the source `.ts` (ENOENT tolerated;
+      other unlink failures `console.error`ed, non-fatal). End-state flow:
+      record → reconciler finalizes `recorded` → API remuxes + verifies →
+      `.ts` deleted immediately. No quarantine (decision above).
+    - `backfillMp4` accepts an optional JSON body `{"delete_ts": true}`:
+      additionally, for rows whose `tsPath` already ends `.mp4` with a
+      sibling `<id>.ts` still on disk, re-verify the `.mp4` with ffprobe and
+      unlink the `.ts`; report those in the same response counts.
+    - Owner runs once:
+
+      ```sh
+      curl -X POST http://irae-sheeta.tailc9708.ts.net:8787/recordings/backfill-mp4 \
+        -H 'content-type: application/json' -d '{"delete_ts":true}'
+      ```
+    Commit.
+11. **Docs + version.** `spec.md`: mark the final-container open decision
+    resolved (MP4), update the Components bullet describing `mpegts.js`
+    playback to plain `<video>` MP4, and add the one-line "`ts_path` holds
+    the `.mp4` path post-transition (column name kept)" note to the data
+    model. Bump `package.json` `version` to `0.6.0` (it was set to `0.5.0`
+    when this plan landed, per the versioning convention above) and add the
+    Beta 6 entry to `CHANGELOG.md`. Commit.
+
+**Functional tests** (server suite, names only):
+
+```ts
+// test/functional/server.test.ts (additional blocks)
+t.test("serves a .ts recording as video/mp2t with a .ts filename");
+t.test("serves an .mp4 recording as video/mp4 with an .mp4 filename");
+t.test("remuxes to mp4 and re-points ts_path when a recording finalizes");
+t.test("keeps serving the .ts when a remux fails");
+t.test("backfill-mp4 remuxes every remaining .ts row, including trashed ones, and reruns clean");
+t.test("cut pieces are extracted, served, and promoted as mp4");
+t.test("permanent delete removes the .mp4 and its leftover .ts sibling");
+t.test("delete_ts backfill removes only verified leftover .ts files");        // step 10
+t.test("deletes the source .ts after a verified live remux");                 // step 10
+```
+
+**Acceptance criteria — what "Phase 6 done" looks like.**
+- [ ] The release build image contains ffmpeg again and the real-ffmpeg unit
+      test runs un-skipped.
+- [ ] A freshly-captured recording is automatically remuxed to `.mp4` on
+      finalize and plays via plain `<video>` in Chrome, Safari, and Firefox.
+- [ ] Every pre-existing recording was backfilled to `.mp4` by the curl route,
+      with the `.ts` files intact until the explicit step-10 cleanup.
+- [ ] `mpegts.js` is gone from the client and from `package.json`.
+- [ ] Cut previews and promoted pieces are `.mp4` end to end; re-cutting a
+      backfilled recording works.
+- [ ] A failed remux leaves the row serving its `.ts` (extension-aware route)
+      with the real error logged.
+- [ ] After sign-off + step 10, no recording has both a served `.mp4` and a
+      leftover `.ts`, and new recordings delete their `.ts` right after the
+      verified remux.
+- [ ] curl parity holds for the backfill and cleanup — no browser-only path.
+- [ ] `package.json` is `0.6.0`; `CHANGELOG.md` has the Beta 6 entry.
+
 ### Phase 7 — audio-only
 
 **Complexity: Medium.** Audio-only capture and playback, rolled out
