@@ -191,8 +191,10 @@ Phase 3.
 
 **Versioning convention.** Completing Phase N bumps `package.json`'s `version`
 to `0.N.0` (release-facing name: Beta N — see `CHANGELOG.md`). Phases 0–5 are
-shipped, so the current version is `0.5.0`; completing Phase 6 ends by bumping
-to `0.6.0`.
+shipped, so the current version is `0.5.0`; completing **Phase 6a** ends by
+bumping to `0.6.0` (Phase 6b, being deferred later work, doesn't gate this
+bump and doesn't necessarily need one of its own — decide when it's picked
+up).
 
 ### Phase 2 — web client — done
 
@@ -218,7 +220,7 @@ Preview-then-promote Trim/Split over finished recordings via keyframe-snapped
 `ffmpeg -c copy` extraction, with lineage (`cut_from_id`) and full per-piece
 metadata on Keep. See `CHANGELOG.md` — Beta 5.
 
-### Phase 6 — MP4 transition (drop mpegts.js)
+### Phase 6a — MP4 transition (drop mpegts.js)
 
 **Complexity: Medium.** Serve every finished recording as **MP4** (H.264+AAC
 stream copy, `-movflags +faststart`) instead of raw MPEG-TS, so in-browser
@@ -231,9 +233,15 @@ decisions are resolved below, its download item is already shipped (Phase 4's
 `?download=1`), its demux item is deferred (see "Lowest priority").
 
 **Hard safety rule structuring the whole phase: no `.ts` file is deleted from
-disk until the owner signs off the full manual verification.** Steps 1–9 ship
-code and the backfill with every `.ts` kept on disk as a safety net; only
-step 10, a separate later commit gated on that sign-off, deletes anything.
+disk until the owner signs off the full manual verification.** This phase
+(6a) ships code and the backfill with every `.ts` kept on disk as a safety
+net — nothing in 6a ever deletes a `.ts`. Actually disposing of `.ts` files is
+its own later phase, **Phase 6b** (below), deliberately not bundled into 6a:
+6a's own steps end with docs/changelog/version (step 10), then go through a
+fresh-context implementation review and the owner's own deploy + full manual
+verification before 6a is considered done at all. Phase 6b — planned in more
+depth once 6a actually ships — is a distinct, later piece of work, not a
+same-phase final step.
 
 **Decisions (all resolved here — implementation requires no judgment calls).**
 
@@ -261,7 +269,7 @@ step 10, a separate later commit gated on that sign-off, deletes anything.
   the transition. A rename would need a migration plus renaming the `tsPath`
   identifier through repository/service/client/tests for zero behavioral
   gain — contrary to the simplicity guidelines. The mismatch gets a one-line
-  note in `spec.md`'s data-model section (step 11).
+  note in `spec.md`'s data-model section (already there — see step 10).
 - **Playback gating still holds: this app never plays an in-progress
   recording.** Re-confirmed in `docs/serving-format-research.md` §1 —
   `RecordingDetail.vue` mounts its player only under
@@ -284,14 +292,15 @@ step 10, a separate later commit gated on that sign-off, deletes anything.
   route matches the repo's curl-first style, runs with the service's own
   config and permissions, is idempotent (re-run until clean), and stays
   useful as recovery tooling. The owner runs one curl command (step 9).
-- **Final `.ts` disposal (step 10): delete outright, no quarantine.** The
+- **Final `.ts` disposal (Phase 6b): delete outright, no quarantine.** The
   remux is a stream copy — the elementary streams are bit-identical by
   construction — and every output is verified with ffprobe (duration match +
   both streams present) *before* the source `.ts` is touched. A quarantine
   directory would add a sweep, states, and disk pressure to guard against a
   failure mode the verification already catches deterministically. The
   failure path IS the quarantine: if remux or verification fails, the `.ts`
-  is kept, the row keeps serving it, and the error is `console.error`ed.
+  is kept, the row keeps serving it, and the error is `console.error`ed. This
+  decision carries forward unchanged to Phase 6b whenever it's picked up.
 
 **Serving/back-compat model (permanent, not transitional).**
 `serveRecordingFile` in `src/app.ts` becomes extension-aware: Content-Type and
@@ -355,7 +364,7 @@ served, VLC-playable `.ts`, so a remux failure never breaks serving.
    `recorded`, and `tsPath` ends with `.ts`; output path
    `join(this.config.recordingsDir, `${id}.mp4`)`; on success call
    `this.recordings.updateTsPath(id, <mp4 path>)` and return `"remuxed"`.
-   It does **not** delete the `.ts` (step 10 adds that). **It must never
+   It does **not** delete the `.ts` (Phase 6b adds that). **It must never
    reject:** its entire body sits inside one try/catch; the catch
    `console.error`s the real error and returns `"failed"` — the row keeps
    serving its `.ts`. Hook it in `RecorderService.transition` (currently
@@ -381,7 +390,7 @@ served, VLC-playable `.ts`, so a remux failure never breaks serving.
    `"remuxed"`/`"skipped"`/`"failed"` return values into the response
    `{ "remuxed": <n>, "skipped": <n>, "failed": ["<id>", …] }`. Idempotent:
    a re-run only touches rows still on `.ts`. No body/params in this step
-   (step 10 adds `delete_ts`). Commit.
+   (Phase 6b adds `delete_ts`). Commit.
 6. **Cut pipeline emits `.mp4` pieces.** In `src/api/cut-extract.ts`, change
    `buildExtractArgv` to output `-c copy -movflags +faststart -f mp4` (drop
    `-f mpegts`; update the comment's reasoning — the `.tmp` argument is
@@ -427,32 +436,26 @@ served, VLC-playable `.ts`, so a remux failure never breaks serving.
    Re-run until `failed` is empty (idempotent). Then the owner works through
    `agent-communications/testing-plan-mp4-transition.md` end to end, against
    both a backfilled recording and a freshly-captured (natively-remuxed) one.
-   Every `.ts` is still on disk throughout. **Owner sign-off gate: step 10
-   does not begin until that checklist passes.**
-10. **Final `.ts` cleanup (post-sign-off only).**
-    - `remuxRecording` gains its deletion tail: after successful verify +
-      rename + `updateTsPath`, unlink the source `.ts` (ENOENT tolerated;
-      other unlink failures `console.error`ed, non-fatal). End-state flow:
-      record → reconciler finalizes `recorded` → API remuxes + verifies →
-      `.ts` deleted immediately. No quarantine (decision above).
-    - `backfillMp4` accepts an optional JSON body `{"delete_ts": true}`:
-      additionally, for rows whose `tsPath` already ends `.mp4` with a
-      sibling `<id>.ts` still on disk, re-verify the `.mp4` with ffprobe and
-      unlink the `.ts`; report those in the same response counts.
-    - Owner runs once:
+   Every `.ts` is still on disk throughout. **Phase 6a is not done until that
+   checklist passes** (any bugs found get fixed before it's considered done).
+   Phase 6b (final `.ts` cleanup, below) is separate later work, not a
+   continuation blocked on this pause.
+10. **Docs + version (last step of 6a — every phase ends here, no
+    exceptions).** `spec.md` and `CHANGELOG.md` were already brought to this
+    phase's target end-state during plan review (MP4 as the decided
+    container/trigger, `mpegts.js` removed from the described architecture,
+    the `ts_path`-holds-`.mp4` data-model note) — this step is a
+    confirmation pass, re-check both against what was actually built and
+    correct any drift, it is not starting from scratch. Bump `package.json`
+    `version` to `0.6.0` (it was set to `0.5.0` when this plan landed) and
+    add the Beta 6 entry to `CHANGELOG.md`. Commit.
 
-      ```sh
-      curl -X POST http://irae-sheeta.tailc9708.ts.net:8787/recordings/backfill-mp4 \
-        -H 'content-type: application/json' -d '{"delete_ts":true}'
-      ```
-    Commit.
-11. **Docs + version.** `spec.md`: mark the final-container open decision
-    resolved (MP4), update the Components bullet describing `mpegts.js`
-    playback to plain `<video>` MP4, and add the one-line "`ts_path` holds
-    the `.mp4` path post-transition (column name kept)" note to the data
-    model. Bump `package.json` `version` to `0.6.0` (it was set to `0.5.0`
-    when this plan landed, per the versioning convention above) and add the
-    Beta 6 entry to `CHANGELOG.md`. Commit.
+**Phase 6a is done only once:** steps 1–10 are implemented and committed,
+a fresh-context MAX-tier agent has reviewed the actual implementation
+(code, tests, and docs together — not the plan) and any bugs it found are
+fixed, and the owner has deployed, backfilled, and worked through the
+testing plan with any resulting bugs fixed too. Phase 6b is planned and
+started only after that.
 
 **Functional tests** (server suite, names only):
 
@@ -465,27 +468,60 @@ t.test("keeps serving the .ts when a remux fails");
 t.test("backfill-mp4 remuxes every remaining .ts row, including trashed ones, and reruns clean");
 t.test("cut pieces are extracted, served, and promoted as mp4");
 t.test("permanent delete removes the .mp4 and its leftover .ts sibling");
-t.test("delete_ts backfill removes only verified leftover .ts files");        // step 10
-t.test("deletes the source .ts after a verified live remux");                 // step 10
 ```
 
-**Acceptance criteria — what "Phase 6 done" looks like.**
+**Acceptance criteria — what "Phase 6a done" looks like.**
 - [ ] The release build image contains ffmpeg again and the real-ffmpeg unit
       test runs un-skipped.
 - [ ] A freshly-captured recording is automatically remuxed to `.mp4` on
       finalize and plays via plain `<video>` in Chrome, Safari, and Firefox.
 - [ ] Every pre-existing recording was backfilled to `.mp4` by the curl route,
-      with the `.ts` files intact until the explicit step-10 cleanup.
+      with every `.ts` file still intact on disk (6a never deletes one).
 - [ ] `mpegts.js` is gone from the client and from `package.json`.
 - [ ] Cut previews and promoted pieces are `.mp4` end to end; re-cutting a
       backfilled recording works.
 - [ ] A failed remux leaves the row serving its `.ts` (extension-aware route)
       with the real error logged.
-- [ ] After sign-off + step 10, no recording has both a served `.mp4` and a
-      leftover `.ts`, and new recordings delete their `.ts` right after the
-      verified remux.
-- [ ] curl parity holds for the backfill and cleanup — no browser-only path.
+- [ ] curl parity holds for the backfill route — no browser-only path.
 - [ ] `package.json` is `0.6.0`; `CHANGELOG.md` has the Beta 6 entry.
+- [ ] A fresh-context MAX-tier implementation review has run and any bugs it
+      found are fixed; the owner has completed
+      `agent-communications/testing-plan-mp4-transition.md` and any bugs
+      found there are fixed too.
+
+### Phase 6b — final `.ts` cleanup (later, separate work)
+
+**Complexity: Low — deliberately deferred, not part of 6a.** Once Phase 6a has
+shipped and been running long enough that the owner is comfortable, this
+phase actually deletes the now-redundant `.ts` files (backfilled ones with a
+verified `.mp4` sibling, and going forward, every new recording's `.ts` right
+after its live remux is verified). Not planned in implementation-sequence
+detail here — do that when 6a has actually shipped and this is picked up —
+but the decisions below carry forward unchanged from 6a's plan review and
+should not be re-litigated:
+
+- **Delete outright, no quarantine** (see the "Final `.ts` disposal" decision
+  under Phase 6a) — the remux is a verified stream copy, and the failure path
+  (keep serving the `.ts`) already is the safety net.
+- `remuxRecording` gains a deletion tail: after a successful verify + rename +
+  `updateTsPath`, unlink the source `.ts` (ENOENT tolerated, other unlink
+  failures `console.error`ed, non-fatal). End-state flow becomes: record →
+  reconciler finalizes `recorded` → API remuxes + verifies → `.ts` deleted
+  immediately.
+- `backfillMp4` gains an optional JSON body `{"delete_ts": true}`: for rows
+  whose `tsPath` already ends `.mp4` with a leftover `.ts` sibling, re-verify
+  the `.mp4` with ffprobe and unlink the `.ts`, reporting those in the same
+  response counts. Owner runs this once, same curl-first pattern as 6a's
+  backfill.
+- Functional tests (names only, to add when this phase is actually planned):
+
+  ```ts
+  t.test("delete_ts backfill removes only verified leftover .ts files");
+  t.test("deletes the source .ts after a verified live remux");
+  ```
+- Ends, like every phase, with its own `CHANGELOG.md` entry (folding into the
+  Beta 6 entry or a small Beta 6b addendum — decide when this is planned) and
+  a version bump if the versioning convention calls for one at that point.
 
 ### Phase 7 — audio-only
 
