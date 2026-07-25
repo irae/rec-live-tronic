@@ -446,13 +446,20 @@ async function handleAddRecording(): Promise<void> {
       ? new Date(form.stop)
       : new Date(startDate.getTime() + (parseDurationMinutes(form.duration) ?? 70) * 60_000);
 
-    await api.createRecording({
+    const recording = await api.createRecording({
       url: form.url,
       ...metadataPayload(),
       quality: form.quality,
       start_at: startDate.toISOString(),
       stop_at: stopDate.toISOString(),
     });
+
+    // If the URL-as-title fallback was used, attempt to correct it with a real
+    // title from oEmbed. Fire and forget; don't block form reset or success toast.
+    const urlFallbackUsed = !form.title.trim() && !form.artist.trim() && !form.venue.trim() && !form.event.trim() && !form.stage.trim();
+    if (urlFallbackUsed) {
+      correctTitleFromOembed(recording.id, form.url);
+    }
 
     resetForm();
     toast("Recording scheduled");
@@ -477,13 +484,20 @@ async function handleAddRecordingNow(): Promise<void> {
     const startDate = new Date();
     const stopDate = new Date(startDate.getTime() + (parseDurationMinutes(form.duration) ?? 70) * 60_000);
 
-    await api.createRecording({
+    const recording = await api.createRecording({
       url: form.url,
       ...metadataPayload(),
       quality: form.quality,
       start_at: startDate.toISOString(),
       stop_at: stopDate.toISOString(),
     });
+
+    // If the URL-as-title fallback was used, attempt to correct it with a real
+    // title from oEmbed. Fire and forget; don't block form reset or success toast.
+    const urlFallbackUsed = !form.title.trim() && !form.artist.trim() && !form.venue.trim() && !form.event.trim() && !form.stage.trim();
+    if (urlFallbackUsed) {
+      correctTitleFromOembed(recording.id, form.url);
+    }
 
     resetForm();
     toast("Recording started");
@@ -543,6 +557,20 @@ async function lookupFormatsForUrl(requestedUrl: string): Promise<void> {
     probedFormats.value = result;
   } catch (err) {
     console.error("Failed to look up available formats:", err);
+  }
+}
+
+// Best-effort title correction: after a recording is created with the URL as
+// a fallback title, attempt to fetch the real title from oEmbed and patch it.
+// Never blocks or errors the form; fires and forgets.
+async function correctTitleFromOembed(recordingId: string, url: string): Promise<void> {
+  try {
+    const { authorName, title } = await api.lookupOembed(url);
+    if (!title && !authorName) return;
+    const realTitle = title || authorName;
+    await api.patchRecording(recordingId, { title: realTitle });
+  } catch (err) {
+    console.error("Failed to correct recording title from oEmbed:", err);
   }
 }
 
