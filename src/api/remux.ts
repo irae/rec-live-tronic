@@ -5,7 +5,7 @@ import { rename, rm } from "node:fs/promises";
 const execFileAsync = promisify(execFile);
 
 export function buildRemuxArgv(sourcePath: string, outputPath: string): string[] {
-  return ["-y", "-i", sourcePath, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath];
+  return ["-y", "-loglevel", "error", "-i", sourcePath, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath];
 }
 
 async function verifyRemuxOutput(ffprobeBin: string, sourcePath: string, outputPath: string): Promise<void> {
@@ -43,7 +43,7 @@ export async function remuxToMp4(ffmpegBin: string, ffprobeBin: string, sourcePa
   const tmpPath = `${outputPath}.tmp`;
   try {
     // Run ffmpeg to temporary output
-    await execFileAsync(ffmpegBin, buildRemuxArgv(sourcePath, tmpPath), { timeout: 600_000 });
+    await execFileAsync(ffmpegBin, buildRemuxArgv(sourcePath, tmpPath), { timeout: 600_000, maxBuffer: 10 * 1024 * 1024 });
 
     // Verify the temporary output
     await verifyRemuxOutput(ffprobeBin, sourcePath, tmpPath);

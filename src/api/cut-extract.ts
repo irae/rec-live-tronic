@@ -22,7 +22,7 @@ export interface CutSegment {
 // name (written before an atomic rename to the final ".mp4" path) would have no
 // extension ffmpeg recognizes, so it refuses to open the output at all.
 export function buildExtractArgv(sourcePath: string, segment: CutSegment, outputPath: string): string[] {
-  return ["-y", "-ss", formatOffset(segment.start), "-i", sourcePath, "-t", formatOffset(segment.end - segment.start), "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath];
+  return ["-y", "-loglevel", "error", "-ss", formatOffset(segment.start), "-i", sourcePath, "-t", formatOffset(segment.end - segment.start), "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath];
 }
 
 // -ss's fast/keyframe seek + -c copy seeks the VIDEO stream to its nearest
@@ -78,5 +78,14 @@ export async function extractSegment(ffmpegBin: string, sourcePath: string, segm
     const snapped = await findKeyframeAtOrBefore(ffprobeBin, sourcePath, segment.start);
     if (snapped !== undefined && segment.start - snapped > SNAP_EPSILON_SECONDS) effectiveSegment = { start: snapped, end: segment.end };
   }
-  await execFileAsync(ffmpegBin, buildExtractArgv(sourcePath, effectiveSegment, outputPath), { timeout: 30_000 });
+  // Phase 5's 30s budget was set before this same phase added
+  // `-movflags +faststart` to the extraction output, which -- like remux.ts's
+  // own faststart pass -- roughly doubles write I/O (a second pass re-reads
+  // and rewrites the whole mdat in place). Cut pieces are trimmed segments,
+  // typically much smaller than a full capture, but a large Split of a
+  // multi-hour recording can still produce a piece big enough for the old
+  // budget to be tight. 120s gives generous headroom without going as high as
+  // remux.ts's 10-minute budget, which is sized for a full, unbounded-length
+  // capture rather than a source-bounded cut piece.
+  await execFileAsync(ffmpegBin, buildExtractArgv(sourcePath, effectiveSegment, outputPath), { timeout: 120_000, maxBuffer: 10 * 1024 * 1024 });
 }

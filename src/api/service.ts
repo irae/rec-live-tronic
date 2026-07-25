@@ -658,7 +658,17 @@ export class RecorderService {
       }
       const outputPath = join(this.config.recordingsDir, `${id}.mp4`);
       await remuxToMp4(this.config.ffmpegBin, this.config.ffprobeBin, recording.tsPath, outputPath);
-      this.recordings.updateTsPath(id, outputPath);
+      const changed = this.recordings.updateTsPath(id, outputPath);
+      if (changed === 0) {
+        // The row was trashed and purged (or auto-swept) while this remux was
+        // in flight: purgeOne already unlinked the .ts and deleted the row, so
+        // the .mp4 this remux just produced has no row left to point to it and
+        // nothing will ever clean it up. Remove it now instead of orphaning it.
+        await unlink(outputPath).catch((error) => {
+          console.error(`Failed to clean up orphaned remux output for ${id} (${outputPath}):`, error);
+        });
+        return "skipped";
+      }
       return "remuxed";
     } catch (error) {
       console.error(`Failed to remux recording ${id}:`, error);

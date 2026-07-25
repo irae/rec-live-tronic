@@ -376,10 +376,15 @@ export class RecordingRepository {
   // first became "recorded") spuriously invalidate an unrelated version-gated
   // write racing against it -- e.g. keepCutDraft's own CAS update on the same
   // source recording.
-  updateTsPath(id: string, tsPath: string, now?: UtcInstant): void {
+  // Returns the number of rows affected so a caller (remuxRecording) can
+  // detect a purge that raced the remux and removed the row before this ran
+  // -- otherwise the just-produced .mp4 would be orphaned on disk with no row
+  // ever pointing to it.
+  updateTsPath(id: string, tsPath: string, now?: UtcInstant): number {
     const updatedAt = timestamp(now, "now");
-    this.database.prepare("UPDATE recordings SET ts_path = ?, updated_at = ? WHERE id = ?")
+    const result = this.database.prepare("UPDATE recordings SET ts_path = ?, updated_at = ? WHERE id = ?")
       .run(tsPath, updatedAt, id);
+    return result.changes;
   }
 
   private getRequired(id: string): Recording {

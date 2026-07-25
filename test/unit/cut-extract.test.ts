@@ -4,11 +4,34 @@ import { promisify } from "node:util";
 import { mkdtemp, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { extractSegment, pickKeyframeAtOrBefore } from "../../src/api/cut-extract.js";
+import { buildExtractArgv, extractSegment, pickKeyframeAtOrBefore } from "../../src/api/cut-extract.js";
 
 const execFileAsync = promisify(execFile);
 
 const ffmpegBin = process.env.REC_LIVE_TEST_FFMPEG_BIN ?? "ffmpeg";
+
+t.test("buildExtractArgv emits copy, faststart, explicit mp4 format, and suppressed loglevel", (t) => {
+  const argv = buildExtractArgv("/source/path.ts", { start: 5, end: 15 }, "/output/piece-0.mp4.tmp");
+  t.same(argv, [
+    "-y",
+    "-loglevel",
+    "error",
+    "-ss",
+    "0:00:05",
+    "-i",
+    "/source/path.ts",
+    "-t",
+    "0:00:10",
+    "-c",
+    "copy",
+    "-movflags",
+    "+faststart",
+    "-f",
+    "mp4",
+    "/output/piece-0.mp4.tmp",
+  ]);
+  t.end();
+});
 
 t.test("pickKeyframeAtOrBefore", (t) => {
   t.test("picks the closest keyframe at or before the target, from raw container-timebase pts", (t) => {

@@ -15,6 +15,8 @@ t.test("buildRemuxArgv emits copy, faststart, explicit mp4 format, and the tmp-s
   const argv = buildRemuxArgv("/source/path.ts", "/output/path.mp4.tmp");
   t.same(argv, [
     "-y",
+    "-loglevel",
+    "error",
     "-i",
     "/source/path.ts",
     "-c",

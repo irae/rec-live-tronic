@@ -1,10 +1,14 @@
 import t from "tap";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadConfig, type Config } from "../../src/config.js";
 import { startServer, type RunningServer } from "../../src/server.js";
 import { openDatabase } from "../../src/db/connection.js";
+import { migrateDatabase } from "../../src/db/migrate.js";
 import { RecordingRepository, type Recording } from "../../src/recordings/repository.js";
 import { CutDraftRepository } from "../../src/recordings/cut-draft-repository.js";
 import { CookieRepository } from "../../src/cookies/repository.js";
@@ -12,6 +16,8 @@ import { RecorderService } from "../../src/api/service.js";
 import type { SystemdClient } from "../../src/systemd/client.js";
 import { createPrivateTransitionClient, reconcileOnce } from "../../src/reconciler/reconcile-once.js";
 import { buildTransientProperties } from "../../src/reconciler/streamlink-command.js";
+
+const execFileAsync = promisify(execFile);
 
 class SystemdStub implements SystemdClient {
   readonly live = new Set<string>();
@@ -209,4 +215,65 @@ t.test("reconciler ignores a trashed recording even if its window is still activ
     t.equal(systemd.stops.length, beforeStops, "no stop should be called for trashed recording");
     t.equal(recordings.getById(created.id)?.status, "scheduled", "status should remain unchanged");
   } finally { apiDatabase.close(); }
+});
+
+t.test("a purge racing an in-flight remux does not leave an orphaned .mp4 on disk", async (t) => {
+  const orphanRoot = await mkdtemp(join(tmpdir(), "rec-live-tronic-orphan-"));
+  try {
+    const recordingsDir = join(orphanRoot, "recordings");
+    await mkdir(recordingsDir, { recursive: true });
+    const databasePath = join(orphanRoot, "state", "rec-live-tronic.sqlite3");
+    const database = openDatabase(databasePath);
+    migrateDatabase(database);
+
+    const ffmpegBin = process.env.REC_LIVE_TEST_FFMPEG_BIN ?? "ffmpeg";
+    const ffprobeBin = process.env.REC_LIVE_TEST_FFPROBE_BIN ?? "ffprobe";
+    const orphanConfig: Config = {
+      host: "127.0.0.1", port: 0, dataDir: join(orphanRoot, "state"), databasePath,
+      cookiesDir: join(orphanRoot, "cookies"), recordingsDir,
+      privateSocketPath: join(orphanRoot, "run", "api.sock"),
+      streamlinkBin: "streamlink", ffmpegBin, ffprobeBin,
+      oembedEndpoint: "http://127.0.0.1:1/oembed",
+      reconcileIntervalSeconds: 30, runtimeSafetySeconds: 60, stopTimeoutSeconds: 30,
+    };
+
+    const testRecordings = new RecordingRepository(database);
+    const service = new RecorderService(testRecordings, new CookieRepository(database), orphanConfig, new SystemdStub(), new CutDraftRepository(database));
+
+    const id = "rec-orphantest";
+    const tsPath = join(recordingsDir, `${id}.ts`);
+    // A tiny real MPEG-TS source so remuxToMp4 exercises real ffmpeg/ffprobe.
+    await execFileAsync(ffmpegBin, [
+      "-y", "-f", "lavfi", "-i", "testsrc2=duration=1:size=64x64:rate=10",
+      "-f", "lavfi", "-i", "anullsrc=duration=1",
+      "-c:v", "libx264", "-c:a", "aac", "-f", "mpegts", tsPath,
+    ]);
+    testRecordings.create({
+      id, url: "https://www.youtube.com/watch?v=orphan", title: "Orphan",
+      quality: "best", startAt: "2030-01-01T00:00:00Z", stopAt: "2030-01-01T00:10:00Z",
+      status: "recorded", unitName: `${id}.service`, tsPath,
+    });
+
+    // Simulates the exact race: purgeOne deletes the row and unlinks the .ts
+    // WHILE remuxToMp4 is still running; by the time remuxRecording calls
+    // updateTsPath, the row is already gone. Patching updateTsPath to delete
+    // the row immediately before running its real SQL reproduces that
+    // ordering without needing a slow/blocking ffmpeg stub.
+    const originalUpdateTsPath = testRecordings.updateTsPath.bind(testRecordings);
+    testRecordings.updateTsPath = (recordingId, newTsPath, now) => {
+      database.prepare("DELETE FROM recordings WHERE id = ?").run(recordingId);
+      return originalUpdateTsPath(recordingId, newTsPath, now);
+    };
+
+    const result = await service.remuxRecording(id);
+    t.equal(result, "skipped", "remux reports skipped when the row disappeared mid-flight");
+
+    const outputPath = join(recordingsDir, `${id}.mp4`);
+    t.equal(existsSync(outputPath), false, "the orphaned .mp4 must not survive on disk");
+    t.equal(testRecordings.getById(id), undefined, "row stays gone");
+
+    database.close();
+  } finally {
+    await rm(orphanRoot, { recursive: true, force: true });
+  }
 });
