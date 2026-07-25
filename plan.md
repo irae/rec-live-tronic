@@ -328,8 +328,19 @@ step 10, a separate later commit gated on that sign-off, deletes anything.
 - **Container: MP4** (`-c copy -movflags +faststart`). Hands-on verified in
   `docs/serving-format-research.md` (§2: real production `.ts` remuxed at
   2300x realtime, identical codecs, `moov` correctly front-loaded; §4: MKV
-  ruled out — no native `<video>` support). Resolves the old ⚠ mkv-vs-mp4
-  open decision.
+  ruled out — no native `<video>` support). Re-verified at scale during plan
+  review, on the production host itself (`sheeta`, ffmpeg 7.1.5): the exact
+  step-3 argv remuxed the largest existing capture (5.5 GB, 4h25m, 1080p) in
+  27 s with zero warnings, output duration matching the source within
+  0.001 s, both streams present, `moov` front-loaded; the step-6 cut argv
+  (`-ss`/`-t` + `+faststart` + `-f mp4` to a `.tmp`-named output) likewise
+  produced a clean, faststart-ed 120 s piece from the same file. `-c copy`
+  alone is sufficient — ffmpeg ≥ 3.2 auto-inserts the `aac_adtstoasc`
+  bitstream filter when muxing ADTS AAC into MP4, and converts Annex-B H.264
+  to AVCC automatically, so no explicit `-bsf` argument exists in this phase;
+  a damaged capture that nonetheless fails to remux is contained by the
+  per-file verification + keep-the-`.ts` fallback below. Resolves the old ⚠
+  mkv-vs-mp4 open decision.
 - **Job mechanism: the in-process one-shot `execFile` ffmpeg job** Phase 5
   built for cut extraction (`src/api/cut-extract.ts` pattern — argv only,
   never a shell, bounded timeout). No reconciler involvement, no systemd
@@ -402,13 +413,19 @@ served, VLC-playable `.ts`, so a remux failure never breaks serving.
      <outputPath>`.
    - `remuxToMp4(ffmpegBin: string, ffprobeBin: string, sourcePath: string,
      outputPath: string): Promise<void>` — runs ffmpeg to
-     `${outputPath}.tmp`, verifies the tmp with ffprobe (container duration
-     within 1 second of the source's, exactly one video and one audio
-     stream), then atomically `rename()`s to `outputPath`. Any failure
-     throws, best-effort removes the `.tmp`, and leaves no final `.mp4`.
-     Timeout: scale with expected size — use a generous fixed bound (10
-     minutes) since multi-GB remuxes are I/O-bound seconds-to-minutes, and a
-     hung ffmpeg must not leak.
+     `${outputPath}.tmp`, verifies the tmp with ffprobe, then atomically
+     `rename()`s to `outputPath`. Verification is two argv-only ffprobe
+     calls in `cut-extract.ts`'s style (`-v error … -of csv=p=0`, 10s
+     timeout each): `-show_entries format=duration` on both source and tmp
+     must agree within 1 second, and `-show_entries stream=codec_type` on
+     the tmp must yield exactly one `video` and one `audio` line. Any
+     failure throws, best-effort removes the `.tmp`, and leaves no final
+     `.mp4`. ffmpeg timeout: a fixed 10 minutes (600_000 ms) — measured on
+     the production host, the largest existing capture (5.5 GB / 4h25m)
+     remuxes in 27 s *including* faststart's second pass (which re-reads
+     and rewrites the whole `mdat` in place — no extra temp file, but
+     roughly double the write I/O — already inside that 27 s), so 10
+     minutes is >20x headroom; a hung ffmpeg must not leak.
    Add `RecordingRepository.updateTsPath(id: string, tsPath: string)` to
    `src/recordings/repository.ts` (plain UPDATE + `updated_at`; API remains
    the sole writer). Unit tests in new `test/unit/remux.test.ts`, following
@@ -421,26 +438,35 @@ served, VLC-playable `.ts`, so a remux failure never breaks serving.
    ```
    Commit.
 4. **Live remux for new recordings.** In `src/api/service.ts` add
-   `RecorderService.remuxRecording(id)`: no-op unless the row exists, status
-   is `recorded`, and `tsPath` ends with `.ts`; output path
+   `RecorderService.remuxRecording(id): Promise<"remuxed" | "skipped" |
+   "failed">`: returns `"skipped"` unless the row exists, status is
+   `recorded`, and `tsPath` ends with `.ts`; output path
    `join(this.config.recordingsDir, `${id}.mp4`)`; on success call
-   `this.recordings.updateTsPath(id, <mp4 path>)`. It does **not** delete the
-   `.ts` (step 10 adds that). On any failure: `console.error` and return —
-   the row keeps serving its `.ts`. Hook it in `RecorderService.transition`
-   (currently `src/api/service.ts:631`): when a transition successfully lands
-   `status === "recorded"`, fire-and-forget `void this.remuxRecording(id)` —
-   the reconciler's CAS response must never wait on ffmpeg. Functional-test
-   support: extend the functional suite's ffprobe stub
-   (`test/functional/server.test.ts` line 43, currently `exit 1`) to print a
-   fixed duration when its argv contains `format=duration` and keep exiting 1
-   otherwise, so remux verification passes against the plain-text fixtures
-   while keyframe-snap behavior is unchanged; the ffmpeg stub already copies
-   input to output regardless of extension. Commit.
+   `this.recordings.updateTsPath(id, <mp4 path>)` and return `"remuxed"`.
+   It does **not** delete the `.ts` (step 10 adds that). **It must never
+   reject:** its entire body sits inside one try/catch; the catch
+   `console.error`s the real error and returns `"failed"` — the row keeps
+   serving its `.ts`. Hook it in `RecorderService.transition` (currently
+   `src/api/service.ts:631`): when a transition successfully lands
+   `status === "recorded"`, fire-and-forget `void this.remuxRecording(id)`
+   — safe from unhandled rejections only because of the never-reject
+   guarantee above, and the reconciler's CAS response must never wait on
+   ffmpeg. Functional-test support: extend the functional suite's ffprobe
+   stub (`test/functional/server.test.ts` line 43, currently `exit 1`): when
+   its argv contains `format=duration` print a fixed duration (e.g.
+   `120.0`), when it contains `stream=codec_type` print `video` and `audio`
+   on two lines, and keep exiting 1 otherwise (the keyframe-snap calls use
+   `format=start_time`/`frame=pts_time`, so they still fail fast and
+   keyframe-snap behavior is unchanged) — remux verification then passes
+   against the plain-text fixtures; the ffmpeg stub already copies input to
+   output regardless of extension. Commit.
 5. **The backfill route.** `POST /recordings/backfill-mp4` in `src/app.ts` →
    new `RecorderService.backfillMp4()`: iterate every `recorded` row
    **including trashed ones** (trash serves downloads/players too) whose
-   `tsPath` ends `.ts`, run `remuxRecording` sequentially (never in
-   parallel — disk-bound), respond
+   `tsPath` ends `.ts`, await `remuxRecording` sequentially (never in
+   parallel — the work is disk-throughput-bound, so parallelism only adds
+   seek contention without finishing sooner), and tally its
+   `"remuxed"`/`"skipped"`/`"failed"` return values into the response
    `{ "remuxed": <n>, "skipped": <n>, "failed": ["<id>", …] }`. Idempotent:
    a re-run only touches rows still on `.ts`. No body/params in this step
    (step 10 adds `delete_ts`). Commit.
