@@ -7,10 +7,10 @@ the Phase 0 recording path.
 ## Simplicity guidelines (all future work)
 
 These govern every new block from here on. They do not retroactively rewrite or
-weaken already-shipped Phase 0 behaviour — the systemd hardening flags,
-permission modes, sole-SQLite-writer invariant, sandboxed transient units, and
-existing configuration all stay exactly as they are. "Simplify" means build the
-next thing simply, not rip out working infrastructure.
+weaken already-shipped behaviour — the systemd hardening flags, permission
+modes, sole-SQLite-writer invariant, sandboxed transient units, and existing
+configuration all stay exactly as they are. "Simplify" means build the next
+thing simply, not rip out working infrastructure.
 
 - **Hardcode over configure.** Only make something configurable when it must
   genuinely differ between dev and the target host (paths, ports, the listen
@@ -30,226 +30,138 @@ next thing simply, not rip out working infrastructure.
   net; simplification targets implementation and process, not verification. If
   removing a code path removes its reason to exist, delete the now-dead test
   with it — but never leave behaviour untested to save effort.
+- **Every phase ends with its changelog entry.** A phase's implementation
+  sequence must literally end with adding its Beta N entry to `CHANGELOG.md`
+  and bumping `package.json` to `0.N.0` (see the versioning convention under
+  "Later phases"). This is a hard completion requirement, not an afterthought —
+  a phase without its changelog entry is not done.
 
-## Decisions made for Phase 0
+## Decisions made during betas
 
-- Use Node.js 24 LTS, TypeScript compiled to JavaScript, npm, Express, and
-  `better-sqlite3`. Production runs compiled JavaScript with `node`; it does
-  not run TypeScript or require Deno/Bun. Keep SQL parameterized and explicit
-  behind small repositories rather than adding an ORM.
-- Run the API and reconciler as the same dedicated, non-login Unix account,
-  `rec-live-tronic`. Neither process nor any recorder runs as the SSH user or
-  as root.
-- Install the API and reconciler as system services with
-  `User=rec-live-tronic`. Enable a lingering systemd user manager for that
-  account; the reconciler uses `systemd-run --user` and `systemctl --user` to
-  manage unprivileged `rec-<id>.service` transient units. Do not add sudoers or
-  polkit rules.
-- Express has a configurable listen host and initially binds `0.0.0.0` so the
-  same service is reachable over the home LAN and Tailscale. The application
-  does not configure or require Tailscale, a reverse proxy, DNS, or a particular
-  firewall. Those remain deployment policy, including on a future VPS.
-- Keep the API as the sole SQLite writer. The reconciler reads SQLite directly
-  and sends status compare-and-set requests to an API listener on a private Unix
-  socket. Public routes never accept arbitrary status changes.
-- Store private state under `/var/lib/rec-live-tronic` and recordings under
-  `/srv/rec-live-tronic/recordings`. Phase 0 gives the optional `rec-media`
-  group direct read-only media access without granting access to SQLite or
-  cookies. The next shared-intranet block below intentionally expands this
-  policy.
-- Generate recording IDs in the API and derive unit names and output paths only
-  from those IDs. Titles, URLs, quality strings, uploaded filenames, and other
-  request data never become command fragments or filesystem paths.
-- Capture Streamlink's binary `--stdout` with systemd
-  `StandardOutput=append:<recordings-root>/<id>.ts`; keep logs on stderr in the
-  journal. Streamlink 8.4's `--output` prompts for an existing file and
-  `--force` overwrites it, so the literal `-o` invocation sketched in `spec.md`
-  cannot implement its required reboot-safe append behavior. This narrow
-  invocation correction retains Streamlink as the direct transient-unit
-  process and needs no shell or wrapper.
-- The reconciler is the authoritative scheduled stopper: once `now >= stop_at`
-  it invokes `systemctl --user stop rec-<id>` and waits for the unit to become
-  inactive before changing durable status. `RuntimeMaxSec` is only systemd's
-  dead-reconciler backstop. Streamlink is never trusted to enforce `stop_at`.
-- Live control is part of Phase 0. The API derives `rec-<id>.service` from the
-  durable ID rather than storing a PID. `PATCH stop_at` commits SQLite before
-  adjusting the live unit's backstop; cancellation commits first and then
-  immediately asks systemd to stop the unit instead of waiting for the next
-  30-second reconciliation tick.
-- Add an internal `last_started_boot_id` recording field. It distinguishes a
-  transient unit lost during reboot (relaunch within the active window) from a
-  unit that ended on the current boot (finalize according to file presence).
-  This resolves an ambiguity between reboot recovery and early-exit handling in
-  `spec.md`.
+Architectural decisions still in force, regardless of which beta introduced
+them. This is a current-state list, not a chronological log — superseded
+decisions are omitted (see `CHANGELOG.md` and git log for history).
 
-## Verified target-host baseline
+- Node.js 24 LTS, TypeScript compiled to JavaScript, npm, Express, and
+  `better-sqlite3`. Production runs compiled JavaScript with `node`. SQL stays
+  parameterized and explicit behind small repositories — no ORM.
+- The API and reconciler run as the dedicated, non-login `rec-live-tronic`
+  account under root-owned system units. A lingering systemd user manager for
+  that account hosts the unprivileged `rec-<id>.service` transient recorder
+  units via `systemd-run --user` / `systemctl --user`. No sudoers or polkit
+  rules.
+- The listen host is configuration, binding `0.0.0.0` so LAN and Tailscale
+  clients both work. The application never configures Tailscale, reverse
+  proxies, DNS, or firewalls — those stay deployment policy.
+- The API is the sole SQLite writer. The reconciler reads SQLite directly and
+  claims status transitions via compare-and-set requests to a private
+  Unix-socket listener. Public routes never accept arbitrary status changes.
+- Private state lives under `/var/lib/rec-live-tronic`, recordings under
+  `/srv/rec-live-tronic/recordings`, config under `/etc/rec-live-tronic`. The
+  shared `rec-media` group has read/write access to recordings, recorder logs,
+  and cookies (group-write via `UMask=0007`); SQLite control state stays
+  private to the service UID, reachable only through the private socket.
+- Recording IDs are generated server-side; unit names and output paths derive
+  only from those IDs. Titles, URLs, quality strings, uploaded filenames, and
+  other request data never become command fragments, shell words, or
+  filesystem/unit identifiers.
+- Capture is streamlink's binary `--stdout` appended by systemd
+  (`StandardOutput=append:<recordings-root>/<id>.ts`) — reboot-safe append
+  that streamlink's own `--output` cannot provide. Recorder stderr appends to
+  the shared `<id>.log` next to the media file.
+- The reconciler is the authoritative scheduled stopper: once
+  `now >= stop_at` it stops the unit and waits for it to go inactive before
+  changing durable status. `RuntimeMaxSec` is only the dead-reconciler
+  backstop; Streamlink is never trusted to enforce `stop_at`. The tick runs
+  every 10 seconds. Live control commits SQLite first, then acts on the unit
+  immediately (`PATCH stop_at` refreshes the backstop; cancellation stops the
+  unit at once) instead of waiting for the next tick.
+- The internal `last_started_boot_id` field distinguishes a transient unit
+  lost during reboot (relaunch within the active window) from a unit that
+  ended on the current boot (finalize according to file presence).
+- Trash is orthogonal to status: a nullable `trashed_at` marks a row trashed
+  while it keeps its terminal status; default and `?status=` listings exclude
+  trashed rows. Permanent delete is gated to trashed rows. A deliberately
+  simple in-process sweep (app start + daily interval, no reconciler, cron,
+  or systemd timer) purges trash older than 30 days.
+- On a finished (`recorded`) recording only free-text metadata is editable
+  (`title`, `stage`, `artist`, `venue`, `event`); `start_at`/`stop_at`/
+  `quality`/`url` describe what was actually captured and stay immutable
+  post-capture. The title is composed server-side from
+  artist/venue/event/stage only at creation when no explicit title is given,
+  and is never recomposed by later metadata edits.
+- ffmpeg/ffprobe work (cut extraction, MP4 remux) runs as in-process one-shot
+  `execFile` jobs — argv only, never a shell, bounded timeouts, binaries from
+  the `ffmpegBin`/`ffprobeBin` config. No per-job systemd units, no
+  reconciler involvement.
+- Cut workflow: at most one active draft per source, its preview pieces in
+  `recordingsDir/<sourceId>/`; Keep promotes chosen pieces to independent
+  first-class `recorded` rows (`cut_from_id` lineage, real wall-clock
+  sub-windows, inherited url/stage/quality, null `cookie_id`); the source is
+  renamed and moved to trash on Keep — never destroyed by the cut itself.
+- Finished recordings are served as faststart MP4 (H.264+AAC stream copy)
+  produced by a post-capture in-process remux; browser playback is a plain
+  `<video src>` with no client-side transmuxing library. Serving stays
+  extension-aware forever, so a row whose remux failed keeps serving its
+  `.ts`. (Phase 6 — full design in that section below.)
 
-Read-only inspection of `irae-sheeta` on 2026-07-21 found:
+## Target host & root-installed dependencies
 
-- Debian 13 (`trixie`), x86-64, Linux 6.12, systemd 257.
-- The system and SSH user's systemd managers are running; lingering is not
-  currently enabled for the SSH user. `systemd-run` supports the transient-unit
-  options required by the spec.
-- `ffmpeg` 7.1 is installed. Streamlink 8.4.0 is installed through pipx at
-  `/home/irae/.local/bin/streamlink`; it works interactively but is owned by and
-  coupled to the human account, so production will not use that installation.
-- Node.js, npm, Corepack, and the SQLite CLI were not found.
-- Tailscale 1.98.9 is active and enabled. The initial deployment can be reached
-  through the node
-  `irae-sheeta.tailc9708.ts.net`, and no Tailscale Serve configuration exists
-  or is needed. This is host context, not an application dependency.
-  Unprivileged user namespaces are enabled, which supports the proposed
-  user-unit hardening.
-- The root filesystem has about 139 GB free. `/tmp` is a small tmpfs and must
-  not hold recordings.
-- The SSH account has no sudo/admin group. No existing recorder systemd units
-  were found.
+`irae-sheeta`: Debian 13 (`trixie`) x86-64, systemd 257, reached at
+`irae-sheeta.tailc9708.ts.net` (host context, not an application dependency).
+`/tmp` is a small tmpfs and must not hold recordings. The SSH account has no
+sudo; root is used only for reviewed install/upgrade runs.
 
-### Root-installed dependencies
+Installed by root before the repository's installer, which verifies versions
+and never silently installs OS packages:
 
-The operator installs these before running the repository's installer:
+- Node.js 24 LTS with npm. (`better-sqlite3` ships prebuilt in the release
+  tarball — the host installs no compiler toolchain.)
+- A root-managed pipx Streamlink (pinned 8.4.0) at
+  `/usr/local/bin/streamlink`, provisioned under `/opt/pipx` — never the
+  human-owned installation under `/home/irae/.local`.
+- `ffmpeg`/`ffprobe` (cut extraction since Phase 5, MP4 remux from Phase 6) —
+  already present on the host.
+- SQLite CLI for diagnosis and backup checks.
 
-- Node.js 24 LTS, including npm.
-- A `better-sqlite3` version supporting Node 24, installed by the locked npm
-  dependency set and packaged in the Debian x86-64 release tarball. The target
-  server does not install a compiler, Python build tooling, or development
-  headers.
-- pipx plus a root-managed global Streamlink installation, initially pinned to
-  the already-proven 8.4.0 release and exposed as
-  `/usr/local/bin/streamlink`. Provision its environment under `/opt/pipx`
-  (for example with root's `PIPX_HOME=/opt/pipx` and
-  `PIPX_BIN_DIR=/usr/local/bin`) rather than under `/root`, whose directories
-  the service account cannot traverse. It is executable by all local users but
-  its code and environment are writable only by root. Do not reuse or alter
-  the human-owned installation under `/home/irae/.local`.
-- SQLite CLI for diagnosis and backup checks. `better-sqlite3` supplies the
-  application's SQLite binding.
-- `ffmpeg` is not needed until Phase 5 (trim/split editing) and is already present.
+## Repository layout notes
 
-The root installer verifies versions and capabilities; it does not silently
-install OS packages or alter the existing human-owned streamlink installation.
+The tree itself is the layout reference; only the non-obvious parts are worth
+stating:
 
-## Planned repository layout
-
-The repository currently contains no application scaffold. Phase 0 creates:
-
-- `package.json` and `package-lock.json`: pinned runtime/development
-  dependencies and `build`, `test`, `dev`, `start`, `reconcile:once`, and
-  `db:migrate` scripts.
-- `tsconfig.json`: strict Node ESM compilation from `src/` to `dist/`.
-- `Dockerfile.build`: reproducible Debian 13 x86-64 build/test/release
-  environment with the compiler toolchain needed by native npm modules.
-- `scripts/build-release.sh`: invokes Docker for `linux/amd64`, runs clean
-  install/build/tests, prunes development dependencies, verifies the native
-  SQLite binding, and emits the installable tarball plus checksum.
-- `.env.example`: non-secret configuration names, including initial
-  `REC_LIVE_HOST=0.0.0.0` and `REC_LIVE_PORT`, plus safe local defaults.
-- `src/config.ts`: loads and validates the listen host/port, paths, streamlink
-  executable, timer/runtime limits, and the private socket path.
-- `src/app.ts`: exports `createApp(deps)`, public Phase 0 routes, consistent
-  errors, and request validation.
-- `src/server.ts`: opens the database, creates services, and starts the public
-  configured TCP listener plus the private Unix-socket listener.
-- `src/db/connection.ts`: opens SQLite, enables WAL, foreign keys, busy timeout,
-  and safe file modes.
-- `src/db/migrate.ts` and `migrations/001-phase-zero.sql`: idempotent schema
-  migration entry point and the Phase 0 schema.
-- `src/recordings/repository.ts`: `RecordingRepository` reads plus atomic
-  create/cancel/status compare-and-set operations.
-- `src/recordings/service.ts`: schedule validation, live stop-time changes,
-  immediate cancellation, and other public recording use cases.
-- `src/cookies/repository.ts` and `src/cookies/service.ts`: metadata and safe,
-  atomic cookie-file lifecycle.
-- `src/reconciler/reconcile-once.ts`: exports deterministic
-  `reconcileOnce(now, bootId, deps)` with no durable in-memory state.
-- `src/reconciler/main.ts`: one-tick process entry point.
-- `src/reconciler/systemd-client.ts`: `SystemdClient` implementation for
-  listing, starting, stopping, and inspecting only derived `rec-*` user units.
-- `src/reconciler/streamlink-command.ts`: `buildStreamlinkArgs(recording,
-  cookie, config)` and transient-unit property construction.
-- `scripts/install-root.sh`: short, auditable root-side installer, reviewed and
-  run manually. A full run provisions the host and installs all three packages;
-  piece flags (`--deps`, `--web`, `--reconciler`) do a fast partial redeploy of
-  only the named packages on an already-provisioned host. Every selected package
-  is extracted and replaced unconditionally, with no change detection.
-- `scripts/install-sheeta.sh`: personal one-command local wrapper for the owner's
-  `irae-sheeta` host that scps the artifacts plus `install-root.sh` and runs it
-  over SSH; supports the same full and partial-piece flags. Deliberately absent
-  from the README, which documents only the host-agnostic install path.
-- `systemd/rec-live-tronic-api.service`,
-  `systemd/rec-live-tronic-reconciler.service`, and
-  `systemd/rec-live-tronic-reconciler.timer`: root-owned system units for the
-  API and 30-second reconciliation tick.
-- `test/functional/server.test.ts` and
-  `test/functional/recording-lifecycle.test.ts`: the two feature-level suites,
-  with shared process/SQLite/filesystem/systemd-stub helpers under
-  `test/functional/support/`.
-- `README.md`: dependency, build, installation, curl, diagnosis, and upgrade
-  instructions.
+- `scripts/install-root.sh` — short, auditable root-side installer. A full run
+  provisions the host and installs all three packages; `--deps`/`--web`/
+  `--reconciler` do a fast partial redeploy, each selected package extracted
+  and replaced unconditionally (no change detection).
+- `scripts/install-sheeta.sh` — the owner's personal scp+ssh wrapper around
+  `install-root.sh`. Deliberately absent from the README, which documents only
+  the host-agnostic install path.
+- `Dockerfile.build` + `scripts/build-release.sh` — reproducible Debian 13
+  `linux/amd64` build/test/release producing the `web`/`reconciler`/`deps`
+  tarballs.
 
 ## Functional test approach
 
-Keep automated testing proportional to this small project. Use `tap` as the
-test framework and TypeScript test runner. Do not add unit
-tests for repositories, command builders, migrations, configuration parsing,
-the release tarball, or the installation script. `npm test` builds the program
-and runs two functional suites against its real process entry points:
-
-- The server suite starts the compiled HTTP server with a temporary SQLite
-  database and filesystem, then exercises health, cookie upload, scheduling,
-  listing, persistence across restart, live edits, validation, and cancellation
-  through HTTP.
-- The recording-lifecycle suite starts the compiled server, invokes the real
-  one-tick reconciler process, and supplies stub `systemd-run`/`systemctl`
-  executables at the operating-system boundary. It exercises schedule → start
-  → extend/shorten/stop → recorded, cancellation, missed windows, early exit,
-  launch/claim interruption, and reboot recovery as complete scenarios.
-
-The stubs record argv and model unit state; tests assert observable API status,
-files, and stop/start effects rather than individual functions. Real systemd,
-Streamlink, the release tarball, and the root installer get pragmatic smoke
-checks during the `irae-sheeta` acceptance run and are debugged there if they
-fail.
-
-Test file initialization and feature blocks:
-
-```ts
-// test/functional/server.test.ts
-import t from "tap";
-import { startFunctionalServer, stopFunctionalServer } from "./support/server.js";
-
-t.before(startFunctionalServer);
-t.teardown(stopFunctionalServer);
-
-t.test("serves health and the complete cookie and recording workflow");
-t.test("persists scheduled data across a server restart");
-t.test("validates requests without corrupting existing state");
-t.test("edits and cancels a live recording through public HTTP behavior");
-```
-
-```ts
-// test/functional/recording-lifecycle.test.ts
-import t from "tap";
-import {
-  startLifecycleHarness,
-  stopLifecycleHarness,
-} from "./support/lifecycle.js";
-
-t.before(startLifecycleHarness);
-t.teardown(stopLifecycleHarness);
-
-t.test("records a scheduled window and stops it at the durable deadline");
-t.test("extends, shortens, and immediately cancels running recordings");
-t.test("converges after early exit and launch/claim interruption");
-t.test("recovers an active window after reboot and marks missed windows");
-```
+Keep automated testing proportional to this small project; `tap` is the test
+framework and runner. `npm test` builds the program and runs the functional
+suites against its real process entry points: the server suite exercises the
+public HTTP surface over a temporary SQLite database and filesystem, and the
+recording-lifecycle suite drives the real one-tick reconciler with stub
+`systemd-run`/`systemctl`/`streamlink`/`ffmpeg`/`ffprobe` executables at the
+operating-system boundary. Tests assert observable API status, files, and
+unit effects, not individual functions. Small pure helpers with real
+edge-case surface (offset parsing, ffmpeg argv building, keyframe picking)
+get targeted unit tests under `test/unit/`. Real systemd, Streamlink, the
+release tarball, and the installer get pragmatic smoke checks during
+`irae-sheeta` acceptance runs. Browser smoke passes use the Playwright
+harness under `test/e2e/`.
 
 ## Phase 0 — done
 
 Core recorder: Express API + finite reconciler tick + Streamlink over SQLite,
 detached `rec-<id>` transient systemd units, release build + auditable
 installer. See `CHANGELOG.md` — Beta 0. The architecture later phases build on
-stays captured in "Decisions made for Phase 0" above and "Operational
+stays captured in "Decisions made during betas" above and "Operational
 invariants" below.
 
 ## Phase 1 — done
