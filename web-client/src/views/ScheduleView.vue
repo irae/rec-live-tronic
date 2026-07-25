@@ -563,12 +563,27 @@ async function lookupFormatsForUrl(requestedUrl: string): Promise<void> {
 // Best-effort title correction: after a recording is created with the URL as
 // a fallback title, attempt to fetch the real title from oEmbed and patch it.
 // Never blocks or errors the form; fires and forgets.
+//
+// A Now-mode recording is created "scheduled" with start_at already at (or
+// immediately behind) now, so a PATCH lands before the reconciler's next tick
+// flips it to "recording" 409s with "Only future scheduled recordings can be
+// changed" (patchRecording, src/api/service.ts) -- the reconciler tick is
+// ~10s, so this retries a few times with a short delay rather than giving up
+// on the first attempt.
 async function correctTitleFromOembed(recordingId: string, url: string): Promise<void> {
   try {
     const { authorName, title } = await api.lookupOembed(url);
     if (!title && !authorName) return;
     const realTitle = title || authorName;
-    await api.patchRecording(recordingId, { title: realTitle });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        await api.patchRecording(recordingId, { title: realTitle });
+        return;
+      } catch (err) {
+        if (attempt === 4) throw err;
+        await new Promise((resolve) => setTimeout(resolve, 3000));
+      }
+    }
   } catch (err) {
     console.error("Failed to correct recording title from oEmbed:", err);
   }
