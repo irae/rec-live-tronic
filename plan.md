@@ -189,6 +189,11 @@ former Phase 6 (audio-only) is now **Phase 7** and the former Phase 7
 "Lowest priority"; its 30-day trash auto-purge item already shipped with
 Phase 3.
 
+**Renumbering note (2026-07-26).** A new **Phase 7 — duration correctness +
+stream-gap tracking** (scope reserved, design pending) was inserted after
+Phase 6b; the former Phase 7 (audio-only) is now **Phase 8** and the former
+Phase 8 (candidates) is now **Phase 9**.
+
 **Versioning convention.** Completing Phase N bumps `package.json`'s `version`
 to `0.N.0` (release-facing name: Beta N — see `CHANGELOG.md`). Phases 0–5 are
 shipped, so the current version is `0.5.0`; completing **Phase 6a** ends by
@@ -523,7 +528,23 @@ should not be re-litigated:
   Beta 6 entry or a small Beta 6b addendum — decide when this is planned) and
   a version bump if the versioning convention calls for one at that point.
 
-### Phase 7 — audio-only
+### Phase 7 — duration correctness + stream-gap tracking
+
+**Not yet planned in detail — scope reserved, design pending.** Verify and
+correct every recording's `stop_at` against the real, ffprobe-measured
+duration of its actual media file rather than trusting `stop_at - start_at`,
+since a capture's file can contain real internal gaps (streamlink reconnect
+stalls) that complicate what "duration" even means. Track and flag when a
+capture had a stream gap — streamlink reconnected but didn't recover
+seamlessly — recording gap count, offset, and per-gap duration in the DB and
+surfacing them in the UI (a count badge with click-through to a detail
+dialog). This connects to the PTS-gap collapse/preservation fixes in the remux
+and cut-extraction pipelines (commit `4427cda`, and the `remux.ts` equivalent
+`b5bdb68`): this phase is about making the recording lifecycle correctly aware
+of and honest about those gaps, not just handling them safely at the file
+level. No schema, API shape, or implementation sequence is decided here.
+
+### Phase 8 — audio-only
 
 **Complexity: Medium.** Audio-only capture and playback, rolled out
 feature-by-feature behind a global toggle. Later-phase summary depth.
@@ -542,7 +563,7 @@ feature-by-feature behind a global toggle. Later-phase summary depth.
   in Phase 4 (video-only until this phase); audio-only entries become available
   here.
 
-### Phase 8 — candidates (research)
+### Phase 9 — candidates (research)
 
 **Complexity: unknown — research first, plan after.** Bulk-import a broadcast
 schedule and promote entries to recordings. Framed by the owner as **open

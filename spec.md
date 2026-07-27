@@ -116,7 +116,7 @@ route), with the real error logged — remux failure never breaks serving.
   (`trim`/`split`), params, working dir, piece count, status. Tracks the Cut
   workflow's not-yet-promoted previews so orphaned working folders are swept
   by query.
-- **candidates** *(not yet built — Phase 8)*: `id`, `source`, `title`, `url`, `suggested_start`, `suggested_stop`, `imported_at`, `promoted_recording_id?`. A candidate is an un-scheduled suggestion; promoting one creates a `recordings` row.
+- **candidates** *(not yet built — Phase 9)*: `id`, `source`, `title`, `url`, `suggested_start`, `suggested_stop`, `imported_at`, `promoted_recording_id?`. A candidate is an un-scheduled suggestion; promoting one creates a `recordings` row.
 
 ## API surface (curl-first)
 
@@ -141,7 +141,7 @@ pieces) · `DELETE /recordings/:id/cut/:draftId` (abandon).
 
 Cookies: `POST /cookies` (multipart upload, `name` + file) · `GET /cookies` · `DELETE /cookies/:id`.
 
-Candidates *(not yet built — Phase 8)*: `POST /candidates` (bulk import a broadcast schedule) · `GET /candidates` · `POST /candidates/:id/schedule` (promote → recording, optional overrides) · `DELETE /candidates/:id`.
+Candidates *(not yet built — Phase 9)*: `POST /candidates` (bulk import a broadcast schedule) · `GET /candidates` · `POST /candidates/:id/schedule` (promote → recording, optional overrides) · `DELETE /candidates/:id`.
 
 Files: `GET /recordings/:id/file` (and the friendly-filename variant
 `GET /recordings/:id/file/:filename`) — streams a **finished** (`recorded`)
@@ -186,14 +186,16 @@ Numbering matches `plan.md`; completed phases are summarized per-milestone in
   post-capture faststart MP4 remux, extension-aware serving, plain-`<video>`
   playback, `mpegts.js` removed, one-time backfill of pre-existing
   recordings.
-- **Phase 7:** audio-only capture and playback behind a global toggle.
-- **Phase 8:** candidates (bulk schedule import → promote) — research first.
+- **Phase 7:** duration correctness + stream-gap tracking — scope reserved,
+  design pending.
+- **Phase 8:** audio-only capture and playback behind a global toggle.
+- **Phase 9:** candidates (bulk schedule import → promote) — research first.
 - **Deferred, unordered** (see plan.md's lowest-priority section): demux
   (undesigned), client-captured thumbnails, reboot-recovery acceptance test.
 
 ## Open decisions — resolve before the relevant phase (do NOT invent)
 
-- ⚠ **Candidate import format (Phase 8):** JSON array vs. CSV vs. ICS. Default assumption: JSON for MVP.
+- ⚠ **Candidate import format (Phase 9):** JSON array vs. CSV vs. ICS. Default assumption: JSON for MVP.
 
 *Resolved: final serving container is **MP4** (H.264+AAC stream copy,
 `-movflags +faststart`) — hands-on verified in
