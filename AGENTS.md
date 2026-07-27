@@ -12,6 +12,7 @@ This document covers how to set up and run the development environment locally. 
 - Keep architecture/spec docs to current decided state only — historical rationale (what changed, when, why) belongs in git commit history, not living spec docs.
 - Minimize references in docs, unless strictly necessary. Prefer references at the end, pointing to entry points, not an exhaustive file/line inventory.
 - Never end a turn or hand back to the owner with uncommitted work — commit as you go, in small blocks, rather than piling everything into one commit at the end. Only commit what you actually changed; leave any unrelated pre-existing unstaged/untracked files alone.
+- A bug fix that changes what's stored or how a file is produced isn't done until existing data/files are brought in line too, not just future ones. Default to including that backfill in the same piece of work, without a separate check-in, when it's cheap and safe (a straightforward migration, or a batch pass that's fast and low-risk to run again if interrupted). Ask before running anything expensive, slow, or hard to undo (e.g. re-encoding many large files, anything with real production-time cost). If existing data genuinely can't be corrected — the source is gone, the transformation isn't reversible — say so explicitly rather than quietly leaving it wrong.
 
 ## Prerequisites
 
