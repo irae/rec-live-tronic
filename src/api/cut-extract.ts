@@ -9,20 +9,33 @@ export interface CutSegment {
   end: number;
 }
 
-// -ss before -i gives ffmpeg's fast keyframe seek. With -ss as an input
-// option, ffmpeg resets output timestamps to start at 0 at the seek point,
-// so -to is measured from that reset zero -- not from the source's original
-// timeline (verified empirically against ffmpeg 8.1.1: `-ss 10 -to 20`
-// produced a ~20s, not ~10s, output). -t <duration> sidesteps that reset
-// entirely and was verified to produce the correct segment length. Offsets
-// are argv entries only -- never interpolated into a shell string --
+// -ss/-t are input options (before -i): -ss gives ffmpeg's fast keyframe seek,
+// -t limits how much is read from the seek point, so the segment length is
+// measured from the seek -- not the file start.
+//
+// -copyts is load-bearing and non-obvious. Real streamlink captures (concatenated
+// HLS segments) contain video PTS discontinuities -- gaps where the video stalls
+// for tens of seconds while audio keeps flowing (confirmed on a real capture:
+// video gaps of 40s/15s/etc totalling ~100s against a continuous audio track).
+// Without -copyts, ffmpeg's default mpegts timestamp handling "corrects" any jump
+// past its discontinuity threshold by packing the video packets contiguously --
+// collapsing those gaps out of the video timeline while leaving audio untouched.
+// The result is a piece whose video runs progressively AHEAD of its audio (verified:
+// a source with a 40s video stall produced a 90s piece with only ~50s of video).
+// The raw source plays fine because a player honours the PTS gaps as freezes;
+// -c copy through the muxer silently drops them. -copyts preserves the original
+// timestamps (gaps intact); -start_at_zero + -output_ts_offset re-base the seek
+// point to output 0 (start_at_zero shifts by the input's start_time, leaving the
+// seek keyframe at segment.start, which output_ts_offset then cancels); and
+// -avoid_negative_ts make_zero clamps the small audio-leads-video head offset.
+// Offsets are argv entries only -- never interpolated into a shell string --
 // mirroring streamlink-command.ts.
 // -f mp4 is required with -movflags +faststart: without it, ffmpeg picks the
 // output muxer from the output filename's extension, and the working ".mp4.tmp"
 // name (written before an atomic rename to the final ".mp4" path) would have no
 // extension ffmpeg recognizes, so it refuses to open the output at all.
 export function buildExtractArgv(sourcePath: string, segment: CutSegment, outputPath: string): string[] {
-  return ["-y", "-loglevel", "error", "-ss", formatOffset(segment.start), "-i", sourcePath, "-t", formatOffset(segment.end - segment.start), "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath];
+  return ["-y", "-loglevel", "error", "-copyts", "-start_at_zero", "-ss", formatOffset(segment.start), "-t", formatOffset(segment.end - segment.start), "-i", sourcePath, "-c", "copy", "-avoid_negative_ts", "make_zero", "-output_ts_offset", `-${formatOffset(segment.start)}`, "-movflags", "+faststart", "-f", "mp4", outputPath];
 }
 
 // -ss's fast/keyframe seek + -c copy seeks the VIDEO stream to its nearest
