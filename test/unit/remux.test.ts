@@ -1,10 +1,16 @@
 import t from "tap";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, rm, stat, writeFile, copyFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 import { buildRemuxArgv, remuxToMp4 } from "../../src/api/remux.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const fixturesDir = join(__dirname, "../fixtures");
 
 const execFileAsync = promisify(execFile);
 
@@ -107,6 +113,34 @@ t.test("remuxToMp4 rejects and leaves no output when verification fails", async 
 
     // Verify output .mp4 does not exist
     t.rejects(stat(outputPath), "final .mp4 file does not exist");
+
+    // Verify temporary file was cleaned up
+    t.rejects(stat(join(root, "output.mp4.tmp")), "temporary .tmp file does not exist");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+t.test("remuxToMp4 correctly handles valid files with mid-file PTS discontinuities", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "rec-live-tronic-remux-discontinuous-"));
+  const sourcePath = join(root, "source.ts");
+  const outputPath = join(root, "output.mp4");
+
+  try {
+    // Copy fixture that has a mid-file PTS discontinuity (two concatenated segments)
+    // This fixture has genuinely 1 video + 1 audio stream, but ffprobe outputs
+    // the stream list twice when queried with certain parameters, which used to
+    // cause false verification failures
+    const fixturePath = join(fixturesDir, "discontinuous-two-segment.ts");
+    await copyFile(fixturePath, sourcePath);
+
+    // Should succeed - the file is valid despite the PTS discontinuity
+    await remuxToMp4(ffmpegBin, ffprobeBin, sourcePath, outputPath);
+
+    // Verify output file exists and has content
+    const output = await stat(outputPath);
+    t.ok(output.isFile(), "output .mp4 file exists");
+    t.ok(output.size > 0, "output .mp4 file is non-empty");
 
     // Verify temporary file was cleaned up
     t.rejects(stat(join(root, "output.mp4.tmp")), "temporary .tmp file does not exist");

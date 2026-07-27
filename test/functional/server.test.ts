@@ -47,6 +47,11 @@ case "$*" in
     echo "120.0"
     exit 0
     ;;
+  *stream=index,codec_type*)
+    echo "0,video"
+    echo "1,audio"
+    exit 0
+    ;;
   *stream=codec_type*)
     echo "video"
     echo "audio"

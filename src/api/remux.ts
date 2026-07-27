@@ -29,10 +29,24 @@ async function verifyRemuxOutput(ffprobeBin: string, sourcePath: string, outputP
   }
 
   // Verify output has exactly one video and one audio stream
-  const streamsResult = await execFileAsync(ffprobeBin, ["-v", "error", "-show_entries", "stream=codec_type", "-of", "csv=p=0", outputPath], { timeout: 10_000 });
-  const streams = streamsResult.stdout.trim().split("\n").filter(line => line.length > 0);
-  const videoCount = streams.filter(s => s === "video").length;
-  const audioCount = streams.filter(s => s === "audio").length;
+  const streamsResult = await execFileAsync(ffprobeBin, ["-v", "error", "-show_entries", "stream=index,codec_type", "-of", "csv=p=0", outputPath], { timeout: 10_000 });
+  const streamLines = streamsResult.stdout.trim().split("\n").filter(line => line.length > 0);
+
+  // Deduplicate by stream index (in case of mid-file discontinuities causing ffprobe to re-emit stream info)
+  const uniqueStreams = new Map<string, string>();
+  for (const line of streamLines) {
+    const [index, codecType] = line.split(",");
+    if (index !== undefined) {
+      uniqueStreams.set(index, codecType ?? "");
+    }
+  }
+
+  let videoCount = 0;
+  let audioCount = 0;
+  for (const codecType of uniqueStreams.values()) {
+    if (codecType === "video") videoCount++;
+    else if (codecType === "audio") audioCount++;
+  }
 
   if (videoCount !== 1 || audioCount !== 1) {
     throw new Error(`Invalid stream configuration: ${videoCount} video, ${audioCount} audio (expected 1 video, 1 audio)`);
